@@ -217,3 +217,15 @@ partial transcript. Uploaded recordings retain the existing file-transcription p
 Live microphone capture requires HTTPS or a localhost browser origin. For Mac access,
 run `npm run pi:tunnel` and open `http://127.0.0.1:3002`. On the plain HTTP LAN URL,
 use keyboard dictation or the voice-recording upload fallback (up to 20 MB).
+
+**Talk to MISO** (the phone button next to dictation) starts a two-way voice
+conversation using `gpt-realtime-2.1-mini`. WebRTC carries microphone and speaker
+audio directly between the browser and OpenAI, including natural interruptions.
+The Pi creates the call and maintains a server-side WebSocket for the exact same
+validated tools and instructions as the chat agent. No API key is sent to the browser.
+Voice transcripts join the selected saved chat, and tool receipts remain in model
+history. Interrupted spoken replies are marked rather than saved as fully heard.
+The selected chat is locked until the call and any in-flight tool finish. End the
+call with the phone button; calls also end after 15 minutes or a lost browser
+heartbeat. The app does not save voice audio. Microphone access requires the same
+localhost/HTTPS setup as dictation. If autoplay is blocked, use **Enable audio**.

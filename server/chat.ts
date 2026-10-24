@@ -29,7 +29,7 @@ export function createChat(path: string, run: Run) {
   for (const row of db.prepare('SELECT id FROM threads WHERE busy = 1').all()) {
     fail(get(String(row.id))!, 'The service restarted during this reply. Some inventory changes may have completed. Check inventory before trying again.');
   }
-  const publicThread = ({ history: _history, ...thread }: Thread) => thread;
+  const publicThread = ({ history: _history, ...thread }: Thread) => ({ ...thread, messages: thread.messages.filter(message => message.text.trim()) });
   const wireMessages = (thread: Thread) => thread.messages.map(message => ({ id: message.id!, role: message.role, content: message.text }));
   const router = Router();
   router.get('/threads', (_req, res) => res.json(db.prepare('SELECT id, title, updatedAt FROM threads ORDER BY updatedAt DESC').all()));
@@ -108,5 +108,39 @@ export function createChat(path: string, run: Run) {
       res.status(502).json({ error: thread.messages.at(-1)!.text, thread: publicThread(thread) });
     }
   });
-  return { router, close: () => db.close() };
+  function beginVoice(id: string) {
+    const thread = get(id);
+    if (!thread) throw Object.assign(new Error('Conversation not found.'), { status: 404 });
+    if (thread.busy || thread.messages.length >= 100) throw Object.assign(new Error('This conversation is busy or full. Try a new chat.'), { status: 409 });
+    thread.busy = true; save(thread);
+    const originalHistory = [...thread.history];
+    const originalCount = thread.messages.length;
+    let ended = false;
+    const receipts: AgentInputItem[] = [];
+    return {
+      messages: thread.messages.map(message => ({ ...message })),
+      put(itemId: string, role: 'user' | 'assistant', text: string) {
+        if (ended) return;
+        const id = `voice-${itemId}`;
+        const existing = thread.messages.find(message => message.id === id);
+        if (existing) existing.text = text.slice(0, 8000);
+        else {
+          if (thread.messages.length >= 100) throw new Error('Conversation full.');
+          thread.messages.push({ id, role, text: text.slice(0, 8000) });
+        }
+        if (thread.title === 'New conversation' && role === 'user' && text) thread.title = text.slice(0, 60);
+        // Persist each transcript so a service restart can recover the conversation.
+        thread.history = [...originalHistory, ...receipts, ...thread.messages.slice(originalCount).filter(m => m.text).map(m => m.role === 'user'
+          ? { role: 'user' as const, content: m.text }
+          : { role: 'assistant' as const, type: 'message' as const, status: 'completed' as const, content: [{ type: 'output_text' as const, text: m.text }] })];
+        save(thread);
+      },
+      recordTool(name: string, output: string) {
+        const receipt: AgentInputItem = { role: 'assistant', type: 'message', status: 'completed', content: [{ type: 'output_text', text: `Voice tool result (${name}): ${output.slice(0, 16000)}` }] };
+        receipts.push(receipt); thread.history.push(receipt); save(thread);
+      },
+      finish() { if (!ended) { ended = true; thread.messages = thread.messages.filter(message => message.text.trim()); thread.busy = false; save(thread); } },
+    };
+  }
+  return { router, beginVoice, close: () => db.close() };
 }

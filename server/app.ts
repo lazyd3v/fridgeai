@@ -1,4 +1,5 @@
 import express from 'express';
+import { createVoice } from './voice.ts';
 import { createFridgeMcpRouter } from './mcp.ts';
 import { createChat } from './chat.ts';
 import { createDictation } from './dictation.ts';
@@ -36,12 +37,15 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: !!doorConfig?.enabled, recordings: recordings.status(), stream: stream?.status() ?? null, door: door.status() });
   const scans = createScans(dataDir);
   const stopMediaCleanup = startMediaCleanup();
-  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get });
+  const fridgeTools: import('./agent.ts').FridgeTools = { getInventory: store.listItems, getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get };
+  const runAgent = createAgentLoop(fridgeTools);
   const chat = createChat(join(dataDir, 'chat.sqlite'), runAgent);
   app.use('/api', createDictation());
   app.use(express.json({ limit: '512kb' }));
   app.use('/mcp', createFridgeMcpRouter(store.listItems));
   app.use('/api', chat.router);
+  const voice = createVoice(fridgeTools, chat.beginVoice);
+  app.use('/api/voice', voice.router);
   app.use('/api', scans.router);
   app.use('/api', recordings.router);
   app.use('/api/debug/recording', debug.router);
@@ -107,5 +111,5 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     res.status(error.status ?? 500).json({ error: error.status === 400 ? 'Invalid JSON request.' : 'Request failed.' });
   });
   const stopCamera = () => { door.close(); debug.stop('Service stopped during recording.'); recordings.setDoor(null); stream?.setDoor(false); };
-  return { app, stopCamera, close: async () => { stopCamera(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); chat.close(); store.close(); } };
+  return { app, stopCamera, close: async () => { stopCamera(); await voice.close(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); chat.close(); store.close(); } };
 }

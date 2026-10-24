@@ -1148,3 +1148,12 @@ to{
 .chat-markdown pre { overflow-x:auto; white-space:pre-wrap; }
 .chat-markdown a { color:var(--blue); text-decoration:underline; }
 .tool-progress { display:flex; gap:6px; align-items:center; color:#7d896f; font-size:11px; margin-bottom:8px; }
+
+.voice-call.active { background: #b73737 !important; color: white !important; }
+.voice-conversation { border: 1px solid #dce2d5; border-radius: 16px; padding: 14px; margin-bottom: 12px; background: #f0f3ec; }
+.voice-conversation > p:first-child { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 0 0 6px; }
+.voice-dot { width: 8px; height: 8px; border-radius: 50%; background: #2444ff; box-shadow: 0 0 0 4px #2444ff16; flex-shrink: 0; }
+.voice-conversation small { color: #65705e; font-size: 12px; }
+.voice-caption { font-size: 13px; line-height: 1.5; max-height: 110px; overflow: auto; margin: 10px 0 0; }
+.voice-caption strong { color: #2444ff; margin-right: 5px; }
+.composer-actions .voice-call { margin-left: 8px; margin-right: auto; }

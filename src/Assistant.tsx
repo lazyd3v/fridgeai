@@ -3,6 +3,7 @@ import { AssistantRuntimeProvider, ComposerPrimitive, ThreadPrimitive, MessagePr
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown';
 import { useAgUiRuntime, fromAgUiMessages } from '@assistant-ui/react-ag-ui';
 import { HttpAgent } from '@ag-ui/client';
+import { startVoiceConversation, type VoiceStatus } from './voice-conversation';
 import { startLiveDictation } from './live-dictation';
 import { Icon, Miso } from './ui';
 
@@ -66,6 +67,10 @@ function UserMessage() {
 function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (busy: boolean) => void; onFinished: () => void }) {
   const [error, setError] = useState('');
   const [voice, setVoice] = useState<'idle' | 'starting' | 'recording' | 'transcribing'>('idle');
+  const [conversation, setConversation] = useState<VoiceStatus>('idle');
+  const [spoken, setSpoken] = useState({ user: '', assistant: '' });
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const voiceConversation = useRef<ReturnType<typeof startVoiceConversation> | null>(null);
   const [voiceHelp, setVoiceHelp] = useState(false);
   const [running, setRunning] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -77,7 +82,7 @@ function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (b
     async load() { return ExportedMessageRepository.fromArray(fromAgUiMessages(thread.messages.map(message => ({ id: message.id, role: message.role, content: message.text })))); },
     async append() { /* The Pi persists each accepted user turn and agent result. */ },
   } }), [thread]);
-  const runtime = useAgUiRuntime({ agent, adapters, showThinking: false, isDisabled: voice !== 'idle', onError: e => setError(`${e.message} Reload to recover the saved reply before retrying inventory changes.`) });
+  const runtime = useAgUiRuntime({ agent, adapters, showThinking: false, isDisabled: voice !== 'idle' || conversation !== 'idle', onError: e => setError(`${e.message} Reload to recover the saved reply before retrying inventory changes.`) });
   useEffect(() => {
     let wasRunning = false;
     return runtime.thread.subscribe(() => {
@@ -88,15 +93,36 @@ function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (b
       wasRunning = next;
     });
   }, [runtime]);
-  useEffect(() => { callbacks.current.onBusy(running || voice !== 'idle'); }, [running, voice]);
+  useEffect(() => { callbacks.current.onBusy(running || voice !== 'idle' || conversation !== 'idle'); }, [running, voice, conversation]);
   useEffect(() => {
     active.current = true;
     return () => {
       active.current = false;
       liveDictation.current?.cancel();
+      voiceConversation.current?.stop();
     };
   }, []);
-  const disabled = running || voice !== 'idle';
+  const disabled = running || voice !== 'idle' || conversation !== 'idle';
+  function talk() {
+    if (conversation !== 'idle') { voiceConversation.current?.stop(); return; }
+    if (disabled) return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') { setVoiceHelp(true); return; }
+    setError(''); setSpoken({ user: '', assistant: '' }); setAudioBlocked(false);
+    voiceConversation.current = startVoiceConversation({
+      threadId: thread.id,
+      onStatus: state => { if (active.current) setConversation(state); },
+      onTranscript: (role, text) => { if (active.current) setSpoken(previous => ({ ...previous, [role]: text })); },
+      onError: message => { if (active.current) setError(message); },
+      onAudioBlocked: blocked => { if (active.current) setAudioBlocked(blocked); },
+      onEnd: () => {
+        if (!active.current) return;
+        void request<Thread>(`/threads/${thread.id}`).then(saved => {
+          if (active.current) runtime.thread.import(ExportedMessageRepository.fromArray(fromAgUiMessages(saved.messages.map(message => ({ id: message.id, role: message.role, content: message.text })))));
+          callbacks.current.onFinished();
+        }).catch(() => { if (active.current) setError('Reload to recover the saved voice conversation.'); });
+      },
+    });
+  }
   async function transcribe(blob: Blob) {
     setVoice('transcribing'); setError('');
     try {
@@ -129,11 +155,18 @@ function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (b
     </ThreadPrimitive.Viewport>
     <div className="assistant-bottom">
       {error && <p className="chat-error" role="alert">{error}</p>}
-      {voiceHelp && <div className="voice-help">For live dictation, open the app through the localhost SSH tunnel or HTTPS. Here you can upload a voice recording or use your keyboard’s dictation.<button disabled={disabled} onClick={() => fileInput.current?.click()}>Upload voice recording</button></div>}
+      {voiceHelp && <div className="voice-help">For microphone access, open the app through the localhost SSH tunnel or HTTPS. Here you can upload a voice recording or use your keyboard’s dictation.<button disabled={disabled} onClick={() => fileInput.current?.click()}>Upload voice recording</button></div>}
       {voice !== 'idle' && <p className="voice-status" role="status">{voice === 'recording' ? 'Listening… Text appears as you speak. Tap stop when done.' : voice === 'starting' ? 'Connecting your microphone…' : 'Finalizing your transcript…'}</p>}
+      {conversation !== 'idle' && <div className="voice-conversation" aria-label="Live voice conversation">
+        <p role="status"><span className="voice-dot"/>{conversation === 'connecting' ? 'Connecting to MISO…' : conversation === 'speaking' ? 'MISO is speaking · You can interrupt' : conversation === 'thinking' ? 'MISO is thinking…' : 'Listening · Speak naturally'}</p>
+        <small>You’re talking with an AI voice. Tap the phone to end.</small>
+        {spoken.user && <p className="voice-caption"><strong>You</strong> {spoken.user}</p>}
+        {spoken.assistant && <p className="voice-caption"><strong>MISO</strong> {spoken.assistant}</p>}
+        {audioBlocked && <button type="button" onClick={() => void voiceConversation.current?.resumeAudio()}>Enable audio</button>}
+      </div>}
       <ComposerPrimitive.Root className="composer">
         <ComposerPrimitive.Input aria-label="Message MISO" placeholder="Ask MISO about your fridge…" rows={2} maxLength={4000} disabled={disabled}/>
-        <div className="composer-actions"><button type="button" className={voice === 'recording' ? 'recording' : ''} disabled={voice !== 'recording' && voice !== 'starting' && disabled} onClick={() => void dictate()} aria-label={voice === 'starting' ? 'Cancel dictation' : voice === 'recording' ? 'Stop dictation' : 'Dictate a message'} title="Dictate a message">{voice === 'recording' ? <span>■</span> : <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>}</button><ComposerPrimitive.Send className="chat-send" aria-label="Send message" disabled={disabled}><Icon name="send" size={18}/></ComposerPrimitive.Send></div>
+        <div className="composer-actions"><button type="button" className={voice === 'recording' ? 'recording' : ''} disabled={voice !== 'recording' && voice !== 'starting' && disabled} onClick={() => void dictate()} aria-label={voice === 'starting' ? 'Cancel dictation' : voice === 'recording' ? 'Stop dictation' : 'Dictate a message'} title="Dictate a message">{voice === 'recording' ? <span>■</span> : <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>}</button><button type="button" className={conversation !== 'idle' ? 'voice-call active' : 'voice-call'} disabled={conversation === 'idle' && disabled} onClick={talk} aria-label={conversation !== 'idle' ? 'End voice conversation' : 'Talk to MISO'} title={conversation !== 'idle' ? 'End voice conversation' : 'Talk to MISO'}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg></button><ComposerPrimitive.Send className="chat-send" aria-label="Send message" disabled={disabled}><Icon name="send" size={18}/></ComposerPrimitive.Send></div>
       </ComposerPrimitive.Root>
       <input hidden ref={fileInput} type="file" accept="audio/*,.m4a,.mp4,.webm" onChange={event => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ''; }}/>
       <small>Your fridge, a little more inspired.</small>
