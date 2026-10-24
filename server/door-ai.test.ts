@@ -4,7 +4,7 @@ import { observeDoorVideoUrl, doorEventsSchema, toMovements } from './door-ai.ts
 
 test('door observation receives only product titles and returns product/action pairs', async () => {
   const inventory = [{ id: 'cola', name: 'Cola', quantity: 2, createdAt: 'today', notes: '330 ml cans' }];
-  const expected = { events: [{ product: 'Potatoes', action: 'removed' as const }, { product: 'Cola', action: 'removed' as const }] };
+  const expected = { events: [{ product: 'Potatoes', action: 'removed' as const, expirationDate: null }, { product: 'Cola', action: 'removed' as const, expirationDate: null }] };
   const request: typeof fetch = async (_url, options) => {
     const body = JSON.parse(options!.body as string);
     assert.equal(body.model, 'qwen/qwen3.8-omni-flash');
@@ -25,7 +25,7 @@ test('door events reject extra fields and preserve downstream movement compatibi
     { product: 'Milk', action: 'added', notes: 'extra' },
     { product: '', action: 'added' },
   ]) assert.equal(doorEventsSchema.safeParse({ events: [event] }).success, false);
-  assert.deepEqual(toMovements({ events: [{ product: 'Milk', action: 'removed' }] }), {
-    movements: [{ name: 'Milk', direction: 'removed', quantity: 1, evidence: 'Video-reported removed: Milk' }], uncertainties: [],
+  assert.deepEqual(toMovements({ events: [{ product: 'Milk', action: 'removed', expirationDate: null }] }), {
+    movements: [{ name: 'Milk', direction: 'removed', expirationDate: null, quantity: 1, evidence: 'Video-reported removed: Milk' }], uncertainties: [],
   });
 });

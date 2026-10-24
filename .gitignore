@@ -9,3 +9,6 @@ data/
 # Purchased artwork: private local/runtime assets only
 public/private-food-icons/
 Cozy_Food_Icons_400/
+
+# Local dependency symlink used for isolated worktree checks.
+/node_modules

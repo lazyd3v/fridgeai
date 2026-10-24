@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { initialFreshness } from './freshness.ts';
 import { createStore } from './store.ts';
 
 test('notes migration preserves old inventory and supports new and legacy additions', async () => {
@@ -14,7 +15,7 @@ test('notes migration preserves old inventory and supports new and legacy additi
   old.close();
   try {
     const store = createStore(path);
-    assert.deepEqual({ ...store.listItems()[0] }, { id: 'old', name: 'Eggs', quantity: 6, createdAt: '2026-01-01', notes: null, icon: null });
+    assert.deepEqual({ ...store.listItems()[0] }, { id: 'old', name: 'Eggs', quantity: 6, createdAt: '2026-01-01', notes: null, icon: null, freshness: initialFreshness(true) });
     store.addItem('Milk', 1, 'Blue cap.', 'milk_bottle');
     store.addItem('Apples', 2);
     store.close();

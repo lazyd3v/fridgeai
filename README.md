@@ -229,3 +229,13 @@ The selected chat is locked until the call and any in-flight tool finish. End th
 call with the phone button; calls also end after 15 minutes or a lost browser
 heartbeat. The app does not save voice audio. Microphone access requires the same
 localhost/HTTPS setup as dictation. If autoplay is blocked, use **Enable audio**.
+
+## Freshness and returns
+
+Door observation keeps the Qwen Omni schema `{ events: [{ product, action, expirationDate }] }`. The nullable expiration string preserves spoken/label wording; Qwen does not estimate shelf life. Events are processed sequentially. Exact normalized titles match unique removals or recent returns first. Remaining matching/date work uses one `gpt-6-luna` Responses call per product with strict structured output, supplied inventory IDs, and the recording date in `FRIDGE_TIMEZONE` (default `Europe/Paris`). Absolute calendar dates are validated locally.
+
+Packages persist after removal. Taken-out packages disappear from available inventory and become automatically finished after three hours (checked every 15 seconds). Pending earlier footage postpones completion until reconciliation catches up. Deadlines and per-recording event receipts survive restarts; successfully applied events are not repeated on retry. Automatically finished packages remain return candidates for seven days; explicitly finished packages are excluded. Date-only failures do not block identified inventory changes and retry in the background at most every 15 minutes per package.
+
+Returns preserve or shorten dates, never restart age. For recognized resealable categories (cream, milk, yogurt, sauces, juice, cheese, jars/tubs), first use can establish a provisional opening anchor; other opening information can be supplied explicitly through the assistant. The minimal Qwen schema only captures expiration-related speech, not arbitrary finished/opened statements. Estimated dates and the three-hour housekeeping rule are not food-safety guarantees. Existing inventory migrates with unknown age, without a new freshness assumption.
+
+Expand a product's freshness details to correct its date, opening date, identity, or finished state. Taken-out and recently finished packages have a separate section. Ambiguous additions retain candidate IDs and the earliest candidate date provisionally; ambiguous removals pause their recording for review. Supplied conflicting dates are retained without overwriting the current date. The assistant and voice session share package-history and freshness-correction tools.

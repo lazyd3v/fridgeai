@@ -1,3 +1,4 @@
+import { processFreshnessRecording } from './freshness.ts';
 import type { Writable } from 'node:stream';
 import type { AudioSource } from './microphone.ts';
 import { spawn } from 'node:child_process';
@@ -95,10 +96,14 @@ export function createRecordings(dataDir: string, store: Store, fps: number, opt
           const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60_000)]);
           const observations = next.observations ? movementSchema.parse(JSON.parse(next.observations)) : await (options.observe ?? observeDoorVideo)(next.path, signal, store.listItems());
           store.setRecording(next.id, 'processing', null, observations);
-          const inventory = store.listItems();
-          const changes = await (options.reconcile ?? reconcileDoorInventory)(inventory, observations, signal);
-          signal.throwIfAborted();
-          store.applyRecording(next.id, inventory, changes);
+          if (options.reconcile) {
+            const inventory = store.listItems();
+            const changes = await options.reconcile(inventory, observations, signal);
+            signal.throwIfAborted(); store.applyRecording(next.id, inventory, changes);
+          } else {
+            if (observations.uncertainties.length) throw new Error('Uncertain recording.');
+            await processFreshnessRecording(store, next.id, observations.movements, signal);
+          }
         } catch {
           store.setRecording(next.id, closed ? 'queued' : 'failed', 'Analysis could not be applied. Check configuration, observations and inventory, then retry or dismiss.');
           return;

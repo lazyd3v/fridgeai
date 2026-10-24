@@ -1,3 +1,4 @@
+import { Freshness, type Package } from './Freshness';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
@@ -5,7 +6,7 @@ import { Assistant } from './Assistant';
 import { DebugPage } from './DebugPage';
 import { Icon, FoodIcon, type IconName } from './ui';
 
-type Item = { id: string; name: string; quantity: number; icon?: string | null };
+type Item = Package & { icon?: string | null };
 type Recording = { id: string; status: string; createdAt: string; error: string | null; observations: string | null };
 type InventoryLog = { id: string; action: string; beforeJson: string | null; afterJson: string | null; source: string; createdAt: string; reason: string };
 type Capture = { id: string; url: string; createdAt: string };
@@ -20,6 +21,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 function App() {
   const [items, setItems] = useState<Item[]>([]);
+  const [packages, setPackages] = useState<Item[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [history, setHistory] = useState<InventoryLog[]>([]);
   const [capture, setCapture] = useState<Capture | null>(null);
@@ -85,8 +87,8 @@ function App() {
       if (running) return;
       running = true;
       try {
-        const [inventory, sessions, log] = await Promise.all([api<Item[]>('/items'), api<Recording[]>('/recordings'), api<InventoryLog[]>('/inventory-log')]);
-        if (!cancelled) { setItems(inventory); setRecordings(sessions); setHistory(log); setUpdatedAt(new Date()); }
+        const [inventory, sessions, log, allPackages] = await Promise.all([api<Item[]>('/items'), api<Recording[]>('/recordings'), api<InventoryLog[]>('/inventory-log'), api<Item[]>('/packages')]);
+        if (!cancelled) { setItems(inventory); setPackages(allPackages); setRecordings(sessions); setHistory(log); setUpdatedAt(new Date()); }
       } catch { /* The main status poll displays connection failures. */ }
       finally { running = false; }
     };
@@ -148,11 +150,12 @@ function App() {
         </section>
         <div className="dashboard-bottom">
           <section className="panel inventory"><div className="section-heading"><h2>Current items</h2><span className="count">{items.length} {items.length === 1 ? 'item' : 'items'}</span></div>
-            <div className="items" aria-live="polite">{loading ? <div className="empty"><p>Checking your shelves…</p></div> : items.length ? items.map(item => <article className="item" key={item.id}><FoodIcon name={item.name} icon={item.icon}/><div className="item-detail"><h3>{item.name}</h3><p>{item.quantity} {item.quantity === 1 ? 'unit' : 'units'}</p><small><span className="tiny-dot"/> In your fridge</small></div><button className="remove" aria-label={`Remove ${item.name}`} disabled={busy} onClick={() => void removeItem(item.id)}><Icon name="close" size={14}/></button></article>) : <div className="empty"><span className="empty-symbol"><Icon name="leaf" size={28}/></span><h3>A fresh start</h3><p>Add what’s on your shelves.<br/>Good things start with what you have.</p></div>}</div>
+            <div className="items" aria-live="polite">{loading ? <div className="empty"><p>Checking your shelves…</p></div> : items.length ? items.map(item => <article className="item" key={item.id}><FoodIcon name={item.name} icon={item.icon}/><div className="item-detail"><h3>{item.name}</h3><p>{item.quantity} {item.quantity === 1 ? 'unit' : 'units'}</p><small><span className="tiny-dot"/> In your fridge</small><Freshness item={item} refresh={() => void load()}/></div><button className="remove" aria-label={`Remove ${item.name}`} disabled={busy} onClick={() => void removeItem(item.id)}><Icon name="close" size={14}/></button></article>) : <div className="empty"><span className="empty-symbol"><Icon name="leaf" size={28}/></span><h3>A fresh start</h3><p>Add what’s on your shelves.<br/>Good things start with what you have.</p></div>}</div>
             <form onSubmit={addItem}><label htmlFor="name">Add to your fridge</label><div className="form-row"><input id="name" placeholder="e.g. Tomatoes" maxLength={100} required value={name} onChange={e => setName(e.target.value)}/><input aria-label="Quantity" className="quantity" type="number" min="1" max="999" required value={quantity} onChange={e => setQuantity(e.target.value)}/><button className="primary" disabled={busy || loading || mode === 'connecting'}><Icon name="plus" size={16}/> Add</button></div></form>
           </section>
           <section className="panel activity"><div className="section-heading"><h2>Recent activity</h2><select aria-label="Filter activity" value={filter} onChange={e => setFilter(e.target.value)}><option>All</option><option>Added</option><option>Removed</option><option>Updated</option></select></div><p className="section-note">Saved ingredient history</p><div className="activity-list">{activity.filter(event => filter === 'All' || event.action === filter).length ? activity.filter(event => filter === 'All' || event.action === filter).map(event => <div className="activity-row" key={event.id}><span className={`activity-arrow ${event.action === 'Removed' ? 'removed' : ''}`}><Icon name="arrow" size={15}/></span><FoodIcon name={event.name} icon={event.icon}/><div><strong>{event.action} {event.name}</strong></div></div>) : <div className="empty activity-empty"><Icon name="refresh" size={25}/><h3>{activity.length ? 'Nothing here yet' : 'A quiet kitchen'}</h3><p>{activity.length ? 'No matching changes in saved history.' : 'Your additions and removals will appear here.'}</p></div>}</div></section>
         </div>
+    <section className="panel recordings"><details><summary>Taken out and recently finished</summary>{packages.filter(item => item.freshness?.state !== 'in_fridge').slice(0, 30).map(item => <article key={item.id}><h3>{item.name}</h3><p>{item.freshness?.state === 'taken_out' ? `Taken out · finishes automatically at ${new Date(item.freshness.deadline!).toLocaleTimeString()}` : `Finished ${item.freshness?.finishReason === 'timeout' ? 'automatically' : 'explicitly'}`}</p><Freshness item={item} refresh={() => void load()}/></article>)}</details></section>
     <section className="panel recordings"><h2>Door recordings</h2><p className="muted">Recordings are analyzed in order after the door closes. Failed or incomplete sessions pause later updates. Check your shelves before dismissing a session.</p>
       {recordings.length === 0 ? <p>No door recordings yet.</p> : recordings.slice(0, 20).map(recording => <details key={recording.id}>
         <summary>{new Date(recording.createdAt).toLocaleString()} · {recording.status}</summary>

@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { startFreshnessMaintenance } from './freshness-worker.ts';
 import express from 'express';
 import { createVoice } from './voice.ts';
 import { createFridgeMcpRouter } from './mcp.ts';
@@ -23,6 +25,7 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   mkdirSync(dataDir, { recursive: true });
   const store = createStore(join(dataDir, 'fridge.sqlite'));
   const addItem = async (name: string, quantity: number, notes: string | null = null, source = 'manual') => store.addItem(name, quantity, notes, await selectIcon(name, notes), source);
+  const stopFreshness = startFreshnessMaintenance(store);
   const app = express();
   const stream = camera.mode === 'usb' ? new CameraStream(camera) : null;
   if (doorConfig?.enabled && !stream) throw new Error('Door sensor requires USB camera mode.');
@@ -37,7 +40,7 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: !!doorConfig?.enabled, recordings: recordings.status(), stream: stream?.status() ?? null, door: door.status() });
   const scans = createScans(dataDir);
   const stopMediaCleanup = startMediaCleanup();
-  const fridgeTools: import('./agent.ts').FridgeTools = { getInventory: store.listItems, getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get };
+  const fridgeTools: import('./agent.ts').FridgeTools = { getInventory: store.listItems, getPackages: store.listPackages, correctFreshness: store.correctFreshness, getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get };
   const runAgent = createAgentLoop(fridgeTools);
   const chat = createChat(join(dataDir, 'chat.sqlite'), runAgent);
   app.use('/api', createDictation());
@@ -65,6 +68,14 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   app.get('/api/camera/stream', (_req, res) => {
     if (!stream) { res.status(409).json({ error: 'Live streaming requires USB camera mode.' }); return; }
     stream.attach(res);
+  });
+  app.get('/api/packages', (_req, res) => res.json(store.listPackages()));
+  const correctionSchema = z.object({ expirationDate: z.string().nullable().optional(), openedAt: z.string().nullable().optional(), state: z.enum(['in_fridge', 'finished']).optional(), returnId: z.string().uuid().optional(), newPackage: z.boolean().optional() }).strict();
+  app.patch('/api/items/:id/freshness', (req, res) => {
+    const patch = correctionSchema.safeParse(req.body);
+    if (!patch.success) { res.status(400).json({ error: 'Invalid freshness correction.' }); return; }
+    try { res.json(store.correctFreshness(req.params.id, patch.data)); }
+    catch { res.status(400).json({ error: 'Could not apply correction. Check the package and dates.' }); }
   });
   app.get('/api/items', (_req, res) => res.json(store.listItems()));
   app.post('/api/items', async (req, res) => {
@@ -111,5 +122,5 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     res.status(error.status ?? 500).json({ error: error.status === 400 ? 'Invalid JSON request.' : 'Request failed.' });
   });
   const stopCamera = () => { door.close(); debug.stop('Service stopped during recording.'); recordings.setDoor(null); stream?.setDoor(false); };
-  return { app, stopCamera, close: async () => { stopCamera(); await voice.close(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); chat.close(); store.close(); } };
+  return { app, stopCamera, close: async () => { stopCamera(); await voice.close(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); await stopFreshness(); chat.close(); store.close(); } };
 }

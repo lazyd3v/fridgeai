@@ -1157,3 +1157,10 @@ to{
 .voice-caption { font-size: 13px; line-height: 1.5; max-height: 110px; overflow: auto; margin: 10px 0 0; }
 .voice-caption strong { color: #2444ff; margin-right: 5px; }
 .composer-actions .voice-call { margin-left: 8px; margin-right: auto; }
+
+.freshness-details { margin-top: 8px; font-size: 12px; color: #666; }
+.freshness-details summary { cursor: pointer; line-height: 1.5; }
+.freshness-details label { display: block; margin: 8px 0; }
+.freshness-details input { max-width: 150px; padding: 5px; }
+.freshness-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.freshness-details button { padding: 5px 8px; border: 1px solid #ddd; border-radius: 6px; background: white; cursor: pointer; }
