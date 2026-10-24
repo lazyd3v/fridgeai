@@ -40,12 +40,12 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: !!doorConfig?.enabled, recordings: recordings.status(), stream: stream?.status() ?? null, door: door.status() });
   const scans = createScans(dataDir);
   const stopMediaCleanup = startMediaCleanup();
-  const fridgeTools: import('./agent.ts').FridgeTools = { getInventory: store.listItems, getPackages: store.listPackages, correctFreshness: store.correctFreshness, getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get };
+  const fridgeTools: import('./agent.ts').FridgeTools = { getInventory: store.listItems, getPackages: store.listPackages, correctFreshness: (id, patch) => store.correctFreshness(id, patch, 'agent'), getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get };
   const runAgent = createAgentLoop(fridgeTools);
   const chat = createChat(join(dataDir, 'chat.sqlite'), runAgent);
   app.use('/api', createDictation());
   app.use(express.json({ limit: '512kb' }));
-  app.use('/mcp', createFridgeMcpRouter(store.listItems));
+  app.use('/mcp', createFridgeMcpRouter(store.listItems, store));
   app.use('/api', chat.router);
   const voice = createVoice(fridgeTools, chat.beginVoice);
   app.use('/api/voice', voice.router);

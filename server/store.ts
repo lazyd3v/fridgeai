@@ -55,7 +55,7 @@ export function createStore(path: string) {
         saveFreshness(item.id, after.freshness); log(item, after, 'timeout', null, 'No return within three hours');
       }
     }),
-    correctFreshness: (id: string, patch: { expirationDate?: string | null; openedAt?: string | null; state?: Freshness['state']; returnId?: string; newPackage?: boolean }) => transaction(() => {
+    correctFreshness: (id: string, patch: { expirationDate?: string | null; openedAt?: string | null; state?: Freshness['state']; returnId?: string; newPackage?: boolean }, source = 'correction') => transaction(() => {
       const before = listPackages().find(item => item.id === id);
       if (!before) throw new Error('Unknown package.');
       if (patch.expirationDate && !validDate(patch.expirationDate)) throw new Error('Invalid date.');
@@ -80,7 +80,7 @@ export function createStore(path: string) {
       if (patch.expirationDate !== undefined) { f.expirationDate = patch.expirationDate; f.dateSource = patch.expirationDate ? 'supplied' : 'unknown'; f.originalText = patch.expirationDate; f.conflict = null; f.needsEstimate = false; }
       if (patch.openedAt !== undefined) { f.openedAt = patch.openedAt; f.possiblyOpened = false; f.needsEstimate = true; }
       if (patch.state) { f.state = patch.state; f.deadline = null; f.finishReason = patch.state === 'finished' ? 'explicit' : null; }
-      saveFreshness(id, f); const after = { ...before, freshness: f }; log(before, after, 'correction', null, 'Freshness corrected'); return after;
+      saveFreshness(id, f); const after = { ...before, freshness: f }; log(before, after, source, null, 'Freshness corrected'); return after;
     }),
     saveEstimate: (expected: Item, freshness: Freshness) => transaction(() => {
       const current = listPackages().find(item => item.id === expected.id);

@@ -48,3 +48,39 @@ test('MCP exposes exactly one read-only tool and reads fresh inventory', async (
     if (!storeClosed) store.close();
   }
 });
+
+test('MCP date tools edit and clear dates with validation and audit history', async () => {
+  const store = createStore(':memory:');
+  const item = store.addItem('Milk', 1);
+  const app = express(); app.use(express.json()); app.use('/mcp', createFridgeMcpRouter(store.listItems, store));
+  const listener = app.listen(0, '127.0.0.1'); await once(listener, 'listening');
+  const url = new URL(`http://127.0.0.1:${(listener.address() as { port: number }).port}/mcp`);
+  const client = new Client({ name: 'date-test', version: '1.0.0' });
+  try {
+    await client.connect(new StreamableHTTPClientTransport(url));
+    const { tools } = await client.listTools();
+    assert.deepEqual(tools.map(t => t.name), ['get_fridge_contents', 'get_package_history', 'set_product_date']);
+    assert.equal(tools.find(t => t.name === 'set_product_date')!.annotations?.readOnlyHint, false);
+    const edit = (field: string, date: string | null, id = item.id) => client.callTool({ name: 'set_product_date', arguments: { id, field, date } });
+    assert.notEqual((await edit('expirationDate', '2026-11-02')).isError, true);
+    assert.notEqual((await edit('openedAt', '2026-10-24')).isError, true);
+    assert.equal(store.listItems()[0].freshness!.expirationDate, '2026-11-02');
+    assert.equal(store.listItems()[0].freshness!.openedAt, '2026-10-24');
+    assert.equal(store.listLog()[0].source, 'mcp');
+    const count = store.listLog().length;
+    for (const date of ['2026-02-30', 'tomorrow', '']) assert.equal((await edit('expirationDate', date)).isError, true);
+    assert.equal((await edit('createdAt', '2026-10-24')).isError, true);
+    assert.equal((await edit('expirationDate', null, '00000000-0000-4000-8000-000000000000')).isError, true);
+    assert.equal(store.listLog().length, count);
+    await edit('expirationDate', null);
+    assert.equal(store.listItems()[0].freshness!.expirationDate, null);
+    assert.equal(store.listItems()[0].freshness!.openedAt, '2026-10-24');
+    await edit('openedAt', null);
+    assert.equal(store.listItems()[0].freshness!.openedAt, null);
+    store.removeItem(item.id);
+    const history = await client.callTool({ name: 'get_package_history', arguments: {} }) as CallToolResult;
+    assert.equal((history.structuredContent?.packages as { id: string }[])[0].id, item.id);
+    assert.notEqual((await edit('expirationDate', '2026-11-01')).isError, true);
+    assert.equal(store.listItems().length, 0, 'date edits do not restore finished packages');
+  } finally { await client.close(); await new Promise<void>(resolve => listener.close(() => resolve())); store.close(); }
+});

@@ -73,3 +73,29 @@ test('SDK edits and removes inventory with an audit trail', async () => {
     assert.throws(() => store.updateItem(item.id, 'Apples', 1, null), /no longer exists/);
   } finally { store.close(); }
 });
+
+test('conversation date tool sets and explicitly clears dates while preserving other fields', async () => {
+  const store = createStore(':memory:');
+  const item = store.addItem('Milk', 1);
+  store.correctFreshness(item.id, { openedAt: '2026-10-24' });
+  let turn = 0;
+  const model: Model = {
+    async getResponse(): Promise<ModelResponse> {
+      turn++;
+      return { usage: new Usage(), output: turn <= 2
+        ? [{ type: 'function_call', callId: `date-${turn}`, name: 'set_product_date', arguments: JSON.stringify({ id: item.id, field: 'expirationDate', date: turn === 1 ? '2026-11-02' : null }), status: 'completed' }]
+        : [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Done.' }] }] };
+    },
+    async *getStreamedResponse() { throw new Error('unused'); },
+  };
+  try {
+    const calls: string[] = [];
+    const agent = createFridgeAgent({ getInventory: store.listItems, getStatus: () => ({}), addItem: store.addItem, getPackages: store.listPackages, correctFreshness: (id, patch) => store.correctFreshness(id, patch, 'agent') }, calls, model);
+    await new Runner({ tracingDisabled: true }).run(agent, 'Set the milk expiration to November 2, 2026, then clear it.');
+    assert.deepEqual(calls, ['set_product_date', 'set_product_date']);
+    assert.equal(store.listItems()[0].freshness!.expirationDate, null);
+    assert.equal(store.listItems()[0].freshness!.openedAt, '2026-10-24');
+    assert.equal(store.listLog()[0].source, 'agent');
+    assert.equal(JSON.parse(String(store.listLog()[1].afterJson)).freshness.expirationDate, '2026-11-02');
+  } finally { store.close(); }
+});

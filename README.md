@@ -31,13 +31,13 @@ MCP client with that URL using the Streamable HTTP transport. The client must be
 able to reach the Pi on the home network (or use the optional SSH tunnel at
 `http://127.0.0.1:3002/mcp`).
 
-Exactly one tool is exposed: `get_fridge_contents`, displayed as “What's currently
-in my fridge”. It takes no arguments and returns `items`, `retrievedAt` (UTC), and
-`source: "saved_inventory"` as both structured content and JSON text. Each item
-includes its stored ID, name, quantity, notes, icon, and creation timestamp. An
-empty inventory returns `items: []`. Every call reads SQLite afresh; this is the
-saved inventory, not a live camera scan or a guarantee of physical contents.
-The tool does not invoke a model or modify inventory.
+Three tools are exposed:
+- `get_fridge_contents`: read available inventory, dates, local date, and timezone.
+- `get_package_history`: read IDs and dates for all packages, including taken-out and finished items.
+- `set_product_date`: set or clear one date after identifying the package. Arguments: `{ "id": "package-uuid", "field": "expirationDate", "date": "2026-11-02" }`. The field can also be `openedAt`; `date: null` explicitly clears it. Invalid calendar dates are rejected. Other fields and package state are preserved, and edits are audited with source `mcp`.
+
+MCP tools do not invoke a model. The date tool modifies saved inventory metadata. The same `set_product_date` tool is available to MISO chat and voice; those corrections are audited with source `agent`. Refresh/reconnect an MCP client if it cached the previous tool list.
+
 
 The endpoint uses the same Pi process and database as the app, with no separate
 service or port. It shares the app's trusted-home-network access model and has no
