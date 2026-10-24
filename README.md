@@ -193,3 +193,27 @@ Rebuild and restart after adding artwork to refresh the available icon catalog.
 The regular Pi sync includes this ignored folder for private runtime use, and Vite copies
 it into the ignored `dist/` build. Do not force-add either the private folder or generated
 build assets to Git, or upload them as a standalone asset collection.
+
+### MISO conversations and dictation
+
+The assistant panel uses assistant-ui primitives and its native AG-UI runtime adapter.
+`POST /api/threads/:id/run` accepts AG-UI run input and streams text, tool-call,
+completion, and error events over SSE. The Pi uses its persisted SDK history rather
+than client-supplied context; accepted message IDs prevent replayed inventory writes.
+The panel supports saved conversations, starter prompts, and inventory reads,
+adds, edits, and removals. Conversations and SDK history are stored on the Pi in
+`DATA_DIR/chat.sqlite`; inventory changes use the existing inventory audit log.
+A conversation is limited to 50 exchanges; use **New chat** to start fresh. Failed or
+interrupted replies remain visible because tool changes may already have completed.
+
+The microphone streams mono PCM audio through the Pi to OpenAI's Realtime
+transcription API (`gpt-live-transcribe`, low delay). Partial text appears in the
+composer while you speak. Stop finalizes the transcript; recording stops automatically
+after 60 seconds. The final transcript replaces the provisional text, preserving any
+existing draft. Nothing is sent to the chat agent until you press Send. The app does
+not save audio, and the OpenAI key stays on the Pi. Connection failures preserve the
+partial transcript. Uploaded recordings retain the existing file-transcription path.
+
+Live microphone capture requires HTTPS or a localhost browser origin. For Mac access,
+run `npm run pi:tunnel` and open `http://127.0.0.1:3002`. On the plain HTTP LAN URL,
+use keyboard dictation or the voice-recording upload fallback (up to 20 MB).

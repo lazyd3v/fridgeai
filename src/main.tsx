@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import { Assistant } from './Assistant';
 import { DebugPage } from './DebugPage';
-import { Icon, FoodIcon, Miso, type IconName } from './ui';
+import { Icon, FoodIcon, type IconName } from './ui';
 
 type Item = { id: string; name: string; quantity: number; icon?: string | null };
 type Recording = { id: string; status: string; createdAt: string; error: string | null; observations: string | null };
@@ -165,10 +166,7 @@ function App() {
 <p className="workspace-footnote">{door.enabled ? 'Records while the door is open · Pausing hides the preview only' : 'Enable the door sensor for automatic inventory updates'}</p>
       </> : page === 'Debug' ? <DebugPage /> : page === 'Settings' ? <section className="panel settings-panel"><h2>Your kitchen connection</h2><p className="muted">Camera and sensor status from your Raspberry Pi.</p><dl><div><dt>Camera source</dt><dd>{mode}</dd></div><div><dt>Door sensor</dt><dd>{door.enabled ? door.state : 'Not enabled'}</dd></div><div><dt>Preview</dt><dd>{live ? 'Enabled' : 'Paused'}</dd></div></dl><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section> : <section className="panel coming-soon"><span className="empty-symbol"><Icon name={page === 'Recipes' ? 'recipes' : 'shopping'} size={32}/></span><span className="eyebrow">A LITTLE SOMETHING IN THE MAKING</span><h2>{page === 'Recipes' ? 'Good food starts here.' : 'Just what you need.'}</h2><p>{page === 'Recipes' ? 'A place for ideas that make the most of your fridge.' : 'A thoughtful shopping list for your next kitchen adventure.'}</p><span className="count">Coming soon</span><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section>}
     </main>
-    <aside className="assistant" aria-label="MISO assistant preview"><div className="assistant-heading"><h2>MISO</h2><span className="wip">Work in progress</span></div><div className="miso-greeting"><Miso/><div><p>Hello, Roman.</p><h2>What’s cooking?</h2></div><span className="sound-wave" aria-hidden="true"><i/><i/><i/><i/><i/></span></div>
-      <div className="assistant-body"><div className="assistant-message"><span className="mini-miso"><Miso small/></span><div><h3>Your kitchen companion,<br/>coming to life.</h3><p>One place to turn what’s in your fridge into something good.</p></div></div><div className="assistant-preview"><span className="eyebrow">A TASTE OF WHAT’S NEXT</span><div className="preview-feature"><span className="feature-icon peach"><Icon name="recipes"/></span><div><h3>A little dinner inspiration</h3><p>Ideas built around what you have.</p></div></div><div className="preview-feature"><span className="feature-icon sage"><Icon name="leaf"/></span><div><h3>Freshness, first</h3><p>A gentle nudge to use things up.</p></div></div><div className="preview-feature"><span className="feature-icon lavender"><Icon name="shopping"/></span><div><h3>Smarter little lists</h3><p>The missing bits, remembered.</p></div></div></div><p className="assistant-note">We’re getting the kitchen ready.<br/>MISO’s chat is still in the making.</p></div>
-      <div className="assistant-bottom"><div className="suggestions"><span>What can I cook?</span><span>What’s in my fridge?</span></div><div className="composer"><input aria-label="Assistant chat coming soon" placeholder="Ask MISO about your fridge…" disabled/><button disabled aria-label="Send message — coming soon"><Icon name="send" size={18}/></button></div><small>Made for your kitchen. A little magic to come.</small></div>
-    </aside>
+    <Assistant />
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

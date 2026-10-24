@@ -25,6 +25,12 @@
     "pi:sensor:check": "bash scripts/pi.sh sensor-check"
   },
   "dependencies": {
+    "@ag-ui/client": "^1.0.3",
+    "@ag-ui/core": "^1.0.3",
+    "@ag-ui/encoder": "^1.0.3",
+    "@assistant-ui/react": "^0.15.31",
+    "@assistant-ui/react-ag-ui": "^0.1.0",
+    "@assistant-ui/react-markdown": "^0.14.24",
     "@aws-sdk/client-s3": "^3.1156.0",
     "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
@@ -33,6 +39,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tsx": "^4.20.0",
+    "ws": "^8.22.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -40,9 +47,18 @@
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^4.7.0",
     "concurrently": "^9.2.0",
     "typescript": "~5.9.0",
     "vite": "^6.4.0"
+  },
+  "overrides": {
+    "@ag-ui/client": {
+      "zod": "$zod"
+    },
+    "@ag-ui/proto": {
+      "zod": "$zod"
+    }
   }
 }

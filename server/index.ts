@@ -1,3 +1,4 @@
+import { attachLiveDictation } from './live-dictation.ts';
 import { resolve } from 'node:path';
 import { createApp } from './app.ts';
 import type { CameraConfig } from './camera.ts';
@@ -12,7 +13,8 @@ const { app, close, stopCamera } = createApp(resolve(process.env.DATA_DIR ?? './
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 3001);
 const server = app.listen(port, host, () => console.log(`Fridge API: http://${host}:${port} · camera: ${mode}`));
+const stopDictation = attachLiveDictation(server);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
-  stopCamera();
+  stopDictation(); stopCamera();
   server.close(() => { void close().then(() => process.exit(0)); });
 });

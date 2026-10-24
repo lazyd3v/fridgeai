@@ -1,4 +1,7 @@
 import express from 'express';
+import { createFridgeMcpRouter } from './mcp.ts';
+import { createChat } from './chat.ts';
+import { createDictation } from './dictation.ts';
 import { availableIcons, createIconSelector } from './icons.ts';
 import { mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -11,7 +14,6 @@ import { DoorSensor, type DoorConfig } from './door.ts';
 import { createAgentLoop } from './agent.ts';
 import { createScans } from './scans.ts';
 import { startMediaCleanup } from './media.ts';
-import { createFridgeMcpRouter } from './mcp.ts';
 import { createRecordings } from './recordings.ts';
 import { createDebugRecorder } from './debug.ts';
 
@@ -31,9 +33,12 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: !!doorConfig?.enabled, recordings: recordings.status(), stream: stream?.status() ?? null, door: door.status() });
   const scans = createScans(dataDir);
   const stopMediaCleanup = startMediaCleanup();
-  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get });
-  app.use(express.json({ limit: '16kb' }));
+  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get });
+  const chat = createChat(join(dataDir, 'chat.sqlite'), runAgent);
+  app.use('/api', createDictation());
+  app.use(express.json({ limit: '512kb' }));
   app.use('/mcp', createFridgeMcpRouter(store.listItems));
+  app.use('/api', chat.router);
   app.use('/api', scans.router);
   app.use('/api', recordings.router);
   app.use('/api/debug/recording', debug.router);
@@ -44,7 +49,7 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) {
       res.status(400).json({ error: 'Provide a prompt containing 1–4000 characters.' }); return;
     }
-    try { res.json(await runAgent(prompt.trim())); }
+    try { const { history: _history, ...result } = await runAgent(prompt.trim()); res.json(result); }
     catch (error) {
       const failure = error as Error & { status?: number; toolCalls?: string[] };
       res.status(failure.status ?? 500).json({ error: failure.message, toolCalls: failure.toolCalls ?? [] });
@@ -99,5 +104,5 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     res.status(error.status ?? 500).json({ error: error.status === 400 ? 'Invalid JSON request.' : 'Request failed.' });
   });
   const stopCamera = () => { door.close(); debug.stop('Service stopped during recording.'); recordings.setDoor(null); stream?.setDoor(false); };
-  return { app, stopCamera, close: async () => { stopCamera(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); store.close(); } };
+  return { app, stopCamera, close: async () => { stopCamera(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); chat.close(); store.close(); } };
 }

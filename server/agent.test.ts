@@ -46,3 +46,30 @@ test('scan tool returns observations without inventory writes', async () => {
   assert.equal(writes, 0);
   assert.deepEqual(calls, ['scan_initial_inventory']);
 });
+
+test('SDK edits and removes inventory with an audit trail', async () => {
+  const store = createStore(':memory:');
+  const item = store.addItem('Apples', 4, 'green', 'apple');
+  let turn = 0;
+  const model: Model = {
+    async getResponse(): Promise<ModelResponse> {
+      const output: ModelResponse['output'] = ++turn === 1
+        ? [{ type: 'function_call', callId: 'update', name: 'update_inventory_item', arguments: JSON.stringify({ id: item.id, name: 'Apples', quantity: 2, notes: 'green' }), status: 'completed' }]
+        : turn === 2 ? [{ type: 'function_call', callId: 'remove', name: 'remove_inventory_item', arguments: JSON.stringify({ id: item.id }), status: 'completed' }]
+        : [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Done.' }] }];
+      return { usage: new Usage(), output };
+    },
+    async *getStreamedResponse() { throw new Error('unused'); },
+  };
+  try {
+    const calls: string[] = [];
+    await new Runner({ tracingDisabled: true }).run(createFridgeAgent({ getInventory: store.listItems, getStatus: () => ({}), addItem: store.addItem, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent') }, calls, model), 'Update then remove the apples.');
+    assert.deepEqual(calls, ['update_inventory_item', 'remove_inventory_item']);
+    assert.deepEqual(store.listItems(), []);
+    const log = store.listLog();
+    assert.equal(log[0].source, 'agent');
+    assert.equal(JSON.parse(String(log[1].afterJson)).quantity, 2);
+    assert.equal(JSON.parse(String(log[1].afterJson)).icon, 'apple');
+    assert.throws(() => store.updateItem(item.id, 'Apples', 1, null), /no longer exists/);
+  } finally { store.close(); }
+});

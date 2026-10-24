@@ -36,6 +36,14 @@ export function createStore(path: string) {
     addItem: (name: string, quantity: number, notes: string | null = null, icon: string | null = null, source = 'manual') => transaction(() => {
       const item = insert(name, quantity, notes, icon); log(null, item, source, null, 'Item added'); return item;
     }),
+    updateItem: (id: string, name: string, quantity: number, notes: string | null, source = 'agent') => transaction(() => {
+      if (!name.trim() || name.length > 100 || !Number.isInteger(quantity) || quantity < 1 || quantity > 999 || (notes !== null && notes.length > 2000)) throw new Error('Invalid inventory item.');
+      const before = db.prepare('SELECT * FROM items WHERE id = ?').get(id) as Item | undefined;
+      if (!before) throw new Error('Item no longer exists. Read inventory again.');
+      const after = { ...before, name: name.trim(), quantity, notes, icon: name.trim() === before.name ? before.icon : null };
+      db.prepare('UPDATE items SET name = ?, quantity = ?, notes = ?, icon = ? WHERE id = ?').run(after.name, quantity, notes, after.icon ?? null, id);
+      log(before, after, source, null, 'Item updated'); return after;
+    }),
     removeItem: (id: string, source = 'manual') => transaction(() => {
       const item = db.prepare('SELECT * FROM items WHERE id = ?').get(id) as Item | undefined;
       if (!item) return false;
