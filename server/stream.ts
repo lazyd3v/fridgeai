@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import type { CameraConfig } from './camera.ts';
 
@@ -27,6 +28,7 @@ export class CameraStream {
   private clients = new Set<Response>();
   private latest?: Buffer;
   private lastFrameAt = 0;
+  private sessionId: string | null = null;
   private error: string | null = null;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private watchdog?: ReturnType<typeof setInterval>;
@@ -37,7 +39,7 @@ export class CameraStream {
   private retryTimer?: ReturnType<typeof setTimeout>;
   constructor(private config: CameraConfig) {}
 
-  status() { return { running: !!this.child, allowed: this.allowed, lastFrameAt: this.lastFrameAt || null, error: this.error, viewers: this.clients.size }; }
+  status() { return { running: !!this.child, sessionId: this.sessionId, allowed: this.allowed, lastFrameAt: this.lastFrameAt || null, error: this.error, viewers: this.clients.size }; }
 
   setDoor(open: boolean | null) {
     this.allowed = open === true;
@@ -52,6 +54,7 @@ export class CameraStream {
     this.error = null;
     this.latest = undefined;
     this.lastFrameAt = 0;
+    this.sessionId = randomUUID();
     const parser = new JpegFrames();
     const child = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'video4linux2',
       '-framerate', String(this.config.fps ?? 10), '-video_size', this.config.size ?? '640x480',

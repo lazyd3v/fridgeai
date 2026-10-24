@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 import { Icon, FoodIcon, Miso, type IconName } from './ui';
@@ -26,6 +26,8 @@ function App() {
   const [quantity, setQuantity] = useState('1');
   const [live, setLive] = useState(true);
   const [streamKey, setStreamKey] = useState(0);
+  const [cameraSession, setCameraSession] = useState<string | null>(null);
+  const streamFailed = useRef(false);
   const [streamState, setStreamState] = useState('Connecting to camera…');
   const [door, setDoor] = useState<{ enabled: boolean; state: string; raw: number | null }>({ enabled: false, state: 'disabled', raw: null });
   const [cameraAllowed, setCameraAllowed] = useState(true);
@@ -48,19 +50,30 @@ function App() {
   useEffect(() => {
     if (mode !== 'usb') return;
     let cancelled = false;
+    let checking = false;
     const check = async () => {
+      if (checking) return;
+      checking = true;
       try {
-        const status = await api<{ stream: { allowed: boolean; lastFrameAt: number | null; error: string | null }; door: { enabled: boolean; state: string; raw: number | null } }>('/status');
+        const status = await api<{ stream: { sessionId: string | null; allowed: boolean; lastFrameAt: number | null; error: string | null }; door: { enabled: boolean; state: string; raw: number | null } }>('/status');
         if (!cancelled) {
+          // MJPEG may end silently, leaving its last frame visible. A new camera
+          // process must get a new image request even if a quick door cycle was missed.
+          setCameraSession(status.stream?.sessionId ?? null);
+          if (status.stream?.allowed && streamFailed.current) {
+            streamFailed.current = false;
+            setStreamKey(value => value + 1);
+          }
           setDoor(status.door); setCameraAllowed(status.stream?.allowed ?? true);
           setStreamState(status.stream?.error ? 'Camera unavailable — try reconnecting' : status.stream?.lastFrameAt && Date.now() - status.stream.lastFrameAt < 5000 ? 'Live from your webcam' : 'Waiting for camera frames…');
         }
-      } catch { if (!cancelled) { setStreamState('Connection lost — try reconnecting'); setCameraAllowed(false); } }
+      } catch { if (!cancelled) { setStreamState('Connection lost — reconnecting…'); setCameraAllowed(false); } }
+      finally { checking = false; }
     };
     void check();
     const timer = setInterval(() => void check(), 1000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [mode, live, streamKey]);
+  }, [mode]);
   async function takeSnapshot() {
     setCapturing(true); setError('');
     try { setCapture(await api<Capture>('/captures', { method: 'POST' })); }
@@ -94,11 +107,11 @@ function App() {
       {error && <div className="error" role="alert">{error}<button onClick={() => void load()}>Try again</button></div>}
       {page === 'Fridge' ? <>
         <section className={`camera ${expanded ? 'expanded' : ''}`} aria-label="Fridge camera">
-          <div className="camera-view">{mode === 'usb' && !cameraAllowed ? <div className="camera-empty"><Icon name="fridge" size={46}/><h2>{door.state === 'closed' ? 'All tucked away.' : 'Waiting for your fridge'}</h2><p>{door.state === 'closed' ? 'The camera rests while the door is closed.' : 'Waiting for the door sensor to connect.'}</p><span className="camera-hint">The view returns when you open the door.</span></div> : mode === 'usb' && live ? <img key={streamKey} src={`/api/camera/stream?session=${streamKey}`} alt="Live view inside your fridge" onError={() => setStreamState('Camera unavailable — try reconnecting')} /> : capture ? <img src={capture.url} alt="Latest saved fridge snapshot" /> : <div className="camera-empty"><Icon name="camera" size={46}/><h2>{mode === 'usb' ? 'A moment of pause.' : 'A fresh perspective.'}</h2><p>{mode === 'usb' ? 'Start the preview to see inside your fridge.' : 'Take your first snapshot to see what’s inside.'}</p></div>}
+          <div className="camera-view">{mode === 'usb' && !cameraAllowed ? <div className="camera-empty"><Icon name="fridge" size={46}/><h2>{door.state === 'closed' ? 'All tucked away.' : 'Waiting for your fridge'}</h2><p>{door.state === 'closed' ? 'The camera rests while the door is closed.' : 'Waiting for the door sensor to connect.'}</p><span className="camera-hint">The view returns when you open the door.</span></div> : mode === 'usb' && live ? <img key={`${cameraSession}:${streamKey}`} src={`/api/camera/stream?session=${cameraSession ?? 'initial'}&attempt=${streamKey}`} alt="Live view inside your fridge" onError={() => { streamFailed.current = true; setStreamState('Camera unavailable — reconnecting…'); }} /> : capture ? <img src={capture.url} alt="Latest saved fridge snapshot" /> : <div className="camera-empty"><Icon name="camera" size={46}/><h2>{mode === 'usb' ? 'A moment of pause.' : 'A fresh perspective.'}</h2><p>{mode === 'usb' ? 'Start the preview to see inside your fridge.' : 'Take your first snapshot to see what’s inside.'}</p></div>}
             <button className="camera-expand icon-button" aria-label={expanded ? 'Close expanded camera' : 'Expand camera'} aria-pressed={expanded} onClick={() => setExpanded(value => !value)}><Icon name={expanded ? 'close' : 'expand'}/></button>
             <div className="camera-caption"><span className="status-dot"/>{mode === 'demo' ? 'Illustrated demo · not a live feed' : mode === 'usb' && !cameraAllowed ? `Door ${door.state} · Camera off` : mode === 'usb' && live ? streamState : capture ? 'Latest snapshot' : 'Your kitchen, in view'}</div>
           </div>
-          <div className="camera-toolbar"><span><Icon name="camera" size={16}/>{capture ? `Last snapshot · ${new Date(capture.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : 'A little less guessing. A little more freshness.'}</span><div>{mode === 'usb' && <><button className="text-button" onClick={() => setLive(value => !value)}>{live ? 'Pause preview' : 'Start preview'}</button><button className="icon-button compact" aria-label="Reconnect camera" onClick={() => { setStreamState('Connecting to camera…'); setStreamKey(value => value + 1); }}><Icon name="refresh" size={16}/></button></>}<button className="secondary" disabled={capturing || loading || mode === 'connecting' || !cameraAllowed} onClick={() => void takeSnapshot()}>{capturing ? 'Capturing…' : 'Take snapshot'}</button></div></div>
+          <div className="camera-toolbar"><span><Icon name="camera" size={16}/>{capture ? `Last snapshot · ${new Date(capture.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : 'A little less guessing. A little more freshness.'}</span><div>{mode === 'usb' && <><button className="text-button" onClick={() => { setStreamKey(value => value + 1); setLive(value => !value); }}>{live ? 'Pause preview' : 'Start preview'}</button><button className="icon-button compact" aria-label="Reconnect camera" onClick={() => { setStreamState('Connecting to camera…'); setStreamKey(value => value + 1); }}><Icon name="refresh" size={16}/></button></>}<button className="secondary" disabled={capturing || loading || mode === 'connecting' || !cameraAllowed} onClick={() => void takeSnapshot()}>{capturing ? 'Capturing…' : 'Take snapshot'}</button></div></div>
         </section>
         <div className="dashboard-bottom">
           <section className="panel inventory"><div className="section-heading"><h2>Current items</h2><span className="count">{items.length} {items.length === 1 ? 'item' : 'items'}</span></div>
