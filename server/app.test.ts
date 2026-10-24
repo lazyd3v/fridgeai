@@ -8,7 +8,11 @@ import { createApp } from './app.ts';
 
 test('inventory validation, persistence, deletion, and demo snapshots', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fridge-test-'));
-  const instance = createApp(directory, { mode: 'demo', device: '' });
+  const instance = createApp(directory, { mode: 'demo', device: '' }, undefined, async (name, notes) => {
+    assert.equal(name, 'Milk');
+    assert.equal(notes, 'Blue cap');
+    return 'milk_bottle';
+  });
   const server = instance.app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address() as { port: number };
@@ -19,16 +23,20 @@ test('inventory validation, persistence, deletion, and demo snapshots', async ()
     assert.equal((await post({ name: '  ', quantity: 1 })).status, 400);
     assert.equal((await post({ name: 'Milk', quantity: 0 })).status, 400);
     assert.equal((await post({ name: 'Milk', quantity: 1.5 })).status, 400);
-    const response = await post({ name: ' Milk ', quantity: 2 });
+    assert.equal((await post({ name: 'Milk', notes: 123 })).status, 400);
+    const response = await post({ name: ' Milk ', quantity: 2, notes: ' Blue cap ' });
     assert.equal(response.status, 201);
     const item = await response.json();
     assert.equal(item.name, 'Milk');
+    assert.equal(item.icon, 'milk_bottle');
+    assert.equal(item.notes, 'Blue cap');
     const { createStore } = await import('./store.ts');
     const reopened = createStore(join(directory, 'fridge.sqlite'));
     assert.equal(reopened.listItems()[0].name, 'Milk');
     reopened.close();
     const inventory = await (await fetch(`${base}/api/items`)).json();
     assert.equal(inventory[0].quantity, 2);
+    assert.equal(inventory[0].icon, 'milk_bottle');
     const shot = await fetch(`${base}/api/captures`, { method: 'POST' });
     assert.equal(shot.status, 201);
     const capture = await shot.json();

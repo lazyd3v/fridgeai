@@ -1,4 +1,5 @@
 import express from 'express';
+import { availableIcons, createIconSelector } from './icons.ts';
 import { mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { createStore } from './store.ts';
@@ -11,9 +12,10 @@ import { createAgentLoop } from './agent.ts';
 import { createScans } from './scans.ts';
 import { startMediaCleanup } from './media.ts';
 
-export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig) {
+export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig, selectIcon = createIconSelector(availableIcons())) {
   mkdirSync(dataDir, { recursive: true });
   const store = createStore(join(dataDir, 'fridge.sqlite'));
+  const addItem = async (name: string, quantity: number, notes: string | null = null) => store.addItem(name, quantity, notes, await selectIcon(name, notes));
   const app = express();
   const stream = camera.mode === 'usb' ? new CameraStream(camera) : null;
   if (doorConfig?.enabled && !stream) throw new Error('Door sensor requires USB camera mode.');
@@ -22,7 +24,7 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: false, stream: stream?.status() ?? null, door: door.status() });
   const scans = createScans(dataDir);
   const stopMediaCleanup = startMediaCleanup();
-  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem: store.addItem, scanInitialInventory: scans.start, getInitialScan: scans.get });
+  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem, scanInitialInventory: scans.start, getInitialScan: scans.get });
   app.use(express.json({ limit: '16kb' }));
   app.use('/api', scans.router);
   app.get('/api/status', (_req, res) => res.json(getStatus()));
@@ -42,13 +44,16 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     stream.attach(res);
   });
   app.get('/api/items', (_req, res) => res.json(store.listItems()));
-  app.post('/api/items', (req, res) => {
-    const { name, quantity = 1 } = req.body ?? {};
+  app.post('/api/items', async (req, res) => {
+    const { name, quantity = 1, notes = null } = req.body ?? {};
     if (typeof name !== 'string' || !name.trim() || name.trim().length > 100 || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
       res.status(400).json({ error: 'Enter an item name (1–100 characters) and a quantity from 1 to 999.' });
       return;
     }
-    res.status(201).json(store.addItem(name.trim(), quantity));
+    if (notes !== null && (typeof notes !== 'string' || notes.length > 2000)) {
+      res.status(400).json({ error: 'Notes must be text up to 2000 characters.' }); return;
+    }
+    res.status(201).json(await addItem(name.trim(), quantity, notes?.trim() || null));
   });
   app.delete('/api/items/:id', (req, res) => {
     if (!store.removeItem(req.params.id)) { res.status(404).json({ error: 'Item not found.' }); return; }

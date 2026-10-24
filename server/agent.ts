@@ -7,7 +7,7 @@ export type FridgeTools = {
   getInitialScan?: (scanId: string) => unknown;
   getInventory: () => unknown;
   getStatus: () => unknown;
-  addItem: (name: string, quantity: number) => unknown;
+  addItem: (name: string, quantity: number, notes?: string | null) => unknown;
 };
 
 export function createFridgeAgent(fridge: FridgeTools, calls: string[], model: string | Model = AGENT_MODEL) {
@@ -22,7 +22,7 @@ export function createFridgeAgent(fridge: FridgeTools, calls: string[], model: s
       ] : []),
       tool({ name: 'get_inventory', description: 'Read the current saved fridge inventory.', parameters: z.object({}), execute: async () => { calls.push('get_inventory'); return fridge.getInventory(); } }),
       tool({ name: 'get_fridge_status', description: 'Read the camera and door sensor status.', parameters: z.object({}), execute: async () => { calls.push('get_fridge_status'); return fridge.getStatus(); } }),
-      tool({ name: 'add_inventory_item', description: 'Add an item the user explicitly requested to the saved inventory.', parameters: z.object({ name: z.string().trim().min(1).max(100), quantity: z.number().int().min(1).max(999) }), execute: async ({ name, quantity }) => { calls.push('add_inventory_item'); return fridge.addItem(name, quantity); } }),
+      tool({ name: 'add_inventory_item', description: 'Add an item the user explicitly requested to the saved inventory.', parameters: z.object({ name: z.string().trim().min(1).max(100), quantity: z.number().int().min(1).max(999), notes: z.string().trim().max(2000).nullable().default(null) }), execute: async ({ name, quantity, notes }) => { calls.push('add_inventory_item'); return fridge.addItem(name, quantity, notes); } }),
     ],
   });
 }
