@@ -3,6 +3,7 @@ dist/
 .env
 .pi.env
 data/
+test-results/
 *.log
 .DS_Store
 
