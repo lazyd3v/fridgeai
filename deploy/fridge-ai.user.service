@@ -1,0 +1,16 @@
+[Unit]
+Description=Home fridge webcam and inventory
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/fridge-ai
+Environment=NODE_ENV=production
+Environment=PATH=%h/.local/opt/node/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/opt/node/bin/node --import tsx --env-file=.env server/index.ts
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

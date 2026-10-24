@@ -1,0 +1,18 @@
+[Unit]
+Description=Home fridge app
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/fridge-ai
+Environment=NODE_ENV=production
+# Use the absolute paths returned by `command -v node` and `command -v npm`.
+# If Node is installed through nvm, also put its bin directory in PATH here.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
