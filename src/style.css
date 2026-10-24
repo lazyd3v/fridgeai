@@ -1087,3 +1087,9 @@ to{
 .activity select{
   max-width:72px;
   padding:6px 7px}
+
+.recordings { margin-top: 24px; }
+.recordings details { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.recordings summary { cursor: pointer; }
+.recordings pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+.recordings button { margin: 12px 8px 0 0; }

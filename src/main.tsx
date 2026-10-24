@@ -4,6 +4,8 @@ import './style.css';
 import { Icon, FoodIcon, Miso, type IconName } from './ui';
 
 type Item = { id: string; name: string; quantity: number };
+type Recording = { id: string; status: string; createdAt: string; error: string | null; observations: string | null };
+type InventoryLog = { id: string; action: string; beforeJson: string | null; afterJson: string | null; source: string; createdAt: string; reason: string };
 type Capture = { id: string; url: string; createdAt: string };
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, options);
@@ -16,6 +18,8 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 
 function App() {
   const [items, setItems] = useState<Item[]>([]);
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [history, setHistory] = useState<InventoryLog[]>([]);
   const [capture, setCapture] = useState<Capture | null>(null);
   const [mode, setMode] = useState('connecting');
   const [error, setError] = useState('');
@@ -31,10 +35,8 @@ function App() {
   const [cameraAllowed, setCameraAllowed] = useState(true);
   const [page, setPage] = useState('Fridge');
   const [expanded, setExpanded] = useState(false);
-  const [activity, setActivity] = useState<{ id: number; name: string; action: string; time: string }[]>([]);
   const [filter, setFilter] = useState('All');
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  function record(name: string, action: string) { setActivity(current => [{ id: Date.now(), name, action, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...current].slice(0, 30)); }
   useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(false); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, []);
   async function load() {
     setError(''); setLoading(true);
@@ -61,6 +63,28 @@ function App() {
     const timer = setInterval(() => void check(), 1000);
     return () => { cancelled = true; clearInterval(timer); };
   }, [mode, live, streamKey]);
+  useEffect(() => {
+    let cancelled = false;
+    let running = false;
+    const refresh = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const [inventory, sessions, log] = await Promise.all([api<Item[]>('/items'), api<Recording[]>('/recordings'), api<InventoryLog[]>('/inventory-log')]);
+        if (!cancelled) { setItems(inventory); setRecordings(sessions); setHistory(log); setUpdatedAt(new Date()); }
+      } catch { /* The main status poll displays connection failures. */ }
+      finally { running = false; }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 3000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+  async function recordingAction(id: string, action: 'retry' | 'dismiss') {
+    setBusy(true); setError('');
+    try { await api(`/recordings/${id}/${action}`, { method: 'POST' }); setRecordings(await api<Recording[]>('/recordings')); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
   async function takeSnapshot() {
     setCapturing(true); setError('');
     try { setCapture(await api<Capture>('/captures', { method: 'POST' })); }
@@ -71,16 +95,24 @@ function App() {
     event.preventDefault(); setBusy(true); setError('');
     try {
       const item = await api<Item>('/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, quantity: Number(quantity) }) });
-      setItems(current => [item, ...current]); record(item.name, 'Added'); setName(''); setQuantity('1');
+      setItems(current => [item, ...current]); setName(''); setQuantity('1');
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
   async function removeItem(id: string) {
     setBusy(true); setError('');
-    try { await api(`/items/${id}`, { method: 'DELETE' }); record(items.find(item => item.id === id)?.name ?? 'Item', 'Removed'); setItems(current => current.filter(item => item.id !== id)); }
+    try { await api(`/items/${id}`, { method: 'DELETE' }); setItems(current => current.filter(item => item.id !== id)); }
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
+  const activity = history.map(entry => {
+    const before: Item | null = entry.beforeJson ? JSON.parse(entry.beforeJson) : null;
+    const after: Item | null = entry.afterJson ? JSON.parse(entry.afterJson) : null;
+    return { id: entry.id, name: (after ?? before)?.name ?? 'Item',
+      action: entry.action === 'added' ? 'Added' : entry.action === 'removed' ? 'Removed' : 'Updated',
+      time: new Date(entry.createdAt).toLocaleString(), source: entry.source, reason: entry.reason,
+      before: before?.quantity ?? 0, after: after?.quantity ?? 0 };
+  });
   const nav: { label: string; icon: IconName }[] = [{ label: 'Fridge', icon: 'fridge' }, { label: 'Recipes', icon: 'recipes' }, { label: 'Shopping', icon: 'shopping' }, { label: 'Settings', icon: 'settings' }];
   const isLive = mode === 'usb' && live && cameraAllowed && streamState === 'Live from your webcam';
   return <div className="app-shell">
@@ -105,8 +137,19 @@ function App() {
             <div className="items" aria-live="polite">{loading ? <div className="empty"><p>Checking your shelves…</p></div> : items.length ? items.map(item => <article className="item" key={item.id}><FoodIcon name={item.name}/><div className="item-detail"><h3>{item.name}</h3><p>{item.quantity} {item.quantity === 1 ? 'unit' : 'units'}</p><small><span className="tiny-dot"/> In your fridge</small></div><button className="remove" aria-label={`Remove ${item.name}`} disabled={busy} onClick={() => void removeItem(item.id)}><Icon name="close" size={14}/></button></article>) : <div className="empty"><span className="empty-symbol"><Icon name="leaf" size={28}/></span><h3>A fresh start</h3><p>Add what’s on your shelves.<br/>Good things start with what you have.</p></div>}</div>
             <form onSubmit={addItem}><label htmlFor="name">Add to your fridge</label><div className="form-row"><input id="name" placeholder="e.g. Tomatoes" maxLength={100} required value={name} onChange={e => setName(e.target.value)}/><input aria-label="Quantity" className="quantity" type="number" min="1" max="999" required value={quantity} onChange={e => setQuantity(e.target.value)}/><button className="primary" disabled={busy || loading || mode === 'connecting'}><Icon name="plus" size={16}/> Add</button></div></form>
           </section>
-          <section className="panel activity"><div className="section-heading"><h2>Recent activity</h2><select aria-label="Filter activity" value={filter} onChange={e => setFilter(e.target.value)}><option>All</option><option>Added</option><option>Removed</option></select></div><p className="section-note">Changes made in this session</p><div className="activity-list">{activity.filter(event => filter === 'All' || event.action === filter).length ? activity.filter(event => filter === 'All' || event.action === filter).map(event => <div className="activity-row" key={event.id}><span className={`activity-arrow ${event.action === 'Removed' ? 'removed' : ''}`}><Icon name="arrow" size={15}/></span><FoodIcon name={event.name}/><div><strong>{event.action} {event.name}</strong><small>Today, {event.time}</small></div></div>) : <div className="empty activity-empty"><Icon name="refresh" size={25}/><h3>{activity.length ? 'Nothing here yet' : 'A quiet kitchen'}</h3><p>{activity.length ? 'No matching changes this session.' : 'Your additions and removals will appear here.'}</p></div>}</div></section>
-        </div><p className="workspace-footnote">A little care for what’s inside. <span>Freshness tracking is coming soon.</span></p>
+          <section className="panel activity"><div className="section-heading"><h2>Recent activity</h2><select aria-label="Filter activity" value={filter} onChange={e => setFilter(e.target.value)}><option>All</option><option>Added</option><option>Removed</option><option>Updated</option></select></div><p className="section-note">Saved ingredient history</p><div className="activity-list">{activity.filter(event => filter === 'All' || event.action === filter).length ? activity.filter(event => filter === 'All' || event.action === filter).map(event => <div className="activity-row" key={event.id}><span className={`activity-arrow ${event.action === 'Removed' ? 'removed' : ''}`}><Icon name="arrow" size={15}/></span><FoodIcon name={event.name}/><div><strong>{event.action} {event.name}</strong><small>{event.before} → {event.after} · {event.source} · {event.time}</small><small>{event.reason}</small></div></div>) : <div className="empty activity-empty"><Icon name="refresh" size={25}/><h3>{activity.length ? 'Nothing here yet' : 'A quiet kitchen'}</h3><p>{activity.length ? 'No matching changes in saved history.' : 'Your additions and removals will appear here.'}</p></div>}</div></section>
+        </div>
+    <section className="panel recordings"><h2>Door recordings</h2><p className="muted">Recordings are analyzed in order after the door closes. Failed or incomplete sessions pause later updates. Check your shelves before dismissing a session.</p>
+      {recordings.length === 0 ? <p>No door recordings yet.</p> : recordings.slice(0, 20).map(recording => <details key={recording.id}>
+        <summary>{new Date(recording.createdAt).toLocaleString()} · {recording.status}</summary>
+        {recording.error && <p>{recording.error}</p>}
+        {recording.status !== 'recording' && <a href={`/api/recordings/${recording.id}/video`} target="_blank" rel="noreferrer">Watch saved recording</a>}
+        {recording.observations && <pre>{JSON.stringify(JSON.parse(recording.observations), null, 2)}</pre>}
+        {recording.status === 'failed' && <button className="secondary" disabled={busy} onClick={() => void recordingAction(recording.id, 'retry')}>Retry analysis</button>}
+        {['failed', 'incomplete'].includes(recording.status) && <button className="secondary" disabled={busy} onClick={() => void recordingAction(recording.id, 'dismiss')}>Inventory checked · Dismiss session</button>}
+      </details>)}
+    </section>
+<p className="workspace-footnote">{door.enabled ? 'Records while the door is open · Pausing hides the preview only' : 'Enable the door sensor for automatic inventory updates'}</p>
       </> : page === 'Settings' ? <section className="panel settings-panel"><h2>Your kitchen connection</h2><p className="muted">Camera and sensor status from your Raspberry Pi.</p><dl><div><dt>Camera source</dt><dd>{mode}</dd></div><div><dt>Door sensor</dt><dd>{door.enabled ? door.state : 'Not enabled'}</dd></div><div><dt>Preview</dt><dd>{live ? 'Enabled' : 'Paused'}</dd></div></dl><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section> : <section className="panel coming-soon"><span className="empty-symbol"><Icon name={page === 'Recipes' ? 'recipes' : 'shopping'} size={32}/></span><span className="eyebrow">A LITTLE SOMETHING IN THE MAKING</span><h2>{page === 'Recipes' ? 'Good food starts here.' : 'Just what you need.'}</h2><p>{page === 'Recipes' ? 'A place for ideas that make the most of your fridge.' : 'A thoughtful shopping list for your next kitchen adventure.'}</p><span className="count">Coming soon</span><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section>}
     </main>
     <aside className="assistant" aria-label="MISO assistant preview"><div className="assistant-heading"><h2>MISO</h2><span className="wip">Work in progress</span></div><div className="miso-greeting"><Miso/><div><p>Hello, Roman.</p><h2>What’s cooking?</h2></div><span className="sound-wave" aria-hidden="true"><i/><i/><i/><i/><i/></span></div>

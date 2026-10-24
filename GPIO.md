@@ -4,13 +4,13 @@ Target verified over SSH: Raspberry Pi 4 Model B Rev 1.1, `gpiochip0` (`pinctrl-
 
 ## What the app does
 
-- Door open: starts the USB webcam, even if no browser is open.
-- Door closed: stops FFmpeg, releases the webcam, ends streams, and blocks snapshots.
+- Door open: starts the USB webcam and a recording, even if no browser is open.
+- Door closed: stops camera capture, releases the webcam, ends streams, blocks snapshots, and finalizes the MP4 recording for analysis.
 - The web UI reconnects when the door opens (unless you paused the preview).
 - The sensor is sampled about every 110 ms and must remain stable for 250 ms before a change is accepted. Expect roughly 0.3–0.5 seconds for a switch change, plus webcam startup time. UI status polls every second.
 - Missing GPIO access or read errors stop capture until stable readings return.
 - A disconnected wire reads high, just like an open door; this simple circuit cannot detect a broken wire.
-- This switches **capture**, not USB electrical power. The webcam remains powered by USB. There is no audio or continuous video recording. Snapshots are saved only on request.
+- This switches **capture**, not USB electrical power. The webcam remains powered by USB. There is no audio. Video is recorded during door-open sessions; snapshots are saved only on request.
 
 Sensor control is installed but **disabled until you finish wiring**. The existing manual stream still works.
 
@@ -97,3 +97,32 @@ DOOR_DEBOUNCE_MS=250
 `server/door.ts` reads GPIO through libgpiod's `gpioget` and debounces input. `server/stream.ts` enforces the gate for both live streams and snapshots, with one shared FFmpeg process. `/api/status` includes the door state and the last raw reading. No GPIO output or USB power-switching circuit is used.
 
 Validation completed without the sensor connected: GPIO input/pull-up access, unit tests for contact bounce/polarity/error recovery, and camera gate tests. The actual magnet/contact transitions must be checked after wiring.
+
+## Automatic ingredient updates
+
+Each debounced open signal starts recording immediately, using JPEG frames from the existing shared webcam process. A second FFmpeg process encodes H.264 MP4 without opening the camera device. Closing the door finalizes the file under `DATA_DIR/recordings/`. Camera startup and the sensor debounce still apply; position the camera so objects crossing the doorway are visible.
+
+The durable SQLite queue processes completed recordings in order:
+
+1. Upload the MP4 to the existing private Hetzner storage (the existing 24-hour remote retention applies).
+2. Ask Qwen for observed additions/removals, counts, evidence, and uncertainties. Static items and movements within the fridge do not count as changes.
+3. Ask Qwen to match those observations to the current saved ingredients. Derive quantity changes from the observed counts.
+4. Validate and atomically update inventory together with its activity log and recording completion status. Concurrent manual edits cause analysis to fail safely and require a retry against fresh inventory.
+
+This reuses the existing `OPENROUTER_API_KEY` and `S3_*` configuration. No new secrets or sensor settings are needed. FFmpeg must include the `libx264` encoder. The separate conversational assistant continues using its existing model.
+
+The UI refreshes inventory/history automatically and provides recording status, saved-video playback, retry, and dismissal. Uncertain observations, provider errors, sensor faults, camera failures, shutdown during capture, buffer overflow, or sessions over five minutes prevent automatic changes. Failed/incomplete sessions block subsequent analysis until retried or dismissed. Review the affected session and correct its ingredient changes manually before dismissal; later queued sessions still apply in order. Incomplete footage cannot be retried. Local videos are retained in the data directory; remote expiration does not delete local files.
+
+On restart, processing jobs return to the queue, interrupted recordings become incomplete, and committed changes are never replayed. Saved observations are reused on analysis retries. A missing/ambiguous event in the video still requires human correction; this is not an independent census of hidden fridge contents.
+
+`inventory_log` records every successful manual, assistant, or door-video ingredient mutation with before/after values, source, reason, timestamp, and recording ID where applicable. Existing inventory is preserved on migration; historical edits before this feature cannot be reconstructed.
+
+API routes:
+
+- `GET /api/inventory-log` — latest 100 ingredient changes.
+- `GET /api/recordings` — latest 100 sessions, statuses, and observations.
+- `GET /api/recordings/:id/video` — saved local recording.
+- `POST /api/recordings/:id/retry` — retry a failed analysis.
+- `POST /api/recordings/:id/dismiss` — acknowledge a failed/incomplete session without applying changes.
+
+Validate on the Pi after deployment: open the door, move a known item in, close it, and verify a completed recording, the expected quantity change, and its history entry. Repeat for removal and an unchanged session. Watch camera frame rate and CPU during capture; no Mac-hosted application runtime is required.

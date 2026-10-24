@@ -35,6 +35,10 @@ export class CameraStream {
   private doorOpen = false;
   private retiring?: ChildProcessWithoutNullStreams;
   private retryTimer?: ReturnType<typeof setTimeout>;
+  private frameListeners = new Set<(frame: Buffer) => void>();
+  private faultListeners = new Set<() => void>();
+  onFrame(listener: (frame: Buffer) => void) { this.frameListeners.add(listener); return () => { this.frameListeners.delete(listener); }; }
+  onFault(listener: () => void) { this.faultListeners.add(listener); return () => { this.faultListeners.delete(listener); }; }
   constructor(private config: CameraConfig) {}
 
   status() { return { running: !!this.child, allowed: this.allowed, lastFrameAt: this.lastFrameAt || null, error: this.error, viewers: this.clients.size }; }
@@ -68,6 +72,7 @@ export class CameraStream {
       try {
         for (const frame of parser.push(chunk)) {
           this.latest = frame; this.lastFrameAt = Date.now();
+          for (const listener of this.frameListeners) listener(frame);
           for (const client of this.clients) this.writeFrame(client, frame);
           for (const waiter of [...this.waiters]) waiter(frame);
         }
@@ -96,6 +101,7 @@ export class CameraStream {
 
   private fail(message: string) {
     this.error = message;
+    for (const listener of this.faultListeners) listener();
     console.error('Camera stream:', message);
     for (const client of this.clients) client.end();
     this.clients.clear();
