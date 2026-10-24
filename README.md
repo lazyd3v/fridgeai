@@ -16,7 +16,7 @@ curl http://fridgeai.local:3000/api/agent/run \
 
 The command connects directly to the Pi over the home network. The response contains `model`, `output`, and a `toolCalls` list. Try `Add two apples to my inventory, then list my inventory` to exercise a write tool. Refresh the existing inventory UI to see changes.
 
-Tools: `get_inventory`, `get_fridge_status`, and `add_inventory_item`. The SDK handles model → tool → result → model until a final reply, at most eight turns, with a 60-second timeout. One run is allowed at a time. Each request starts fresh; there is no chat history, image analysis, automatic trigger, or agent UI yet. SDK tracing is disabled. Prompts and tool results are sent to OpenAI when you invoke the endpoint. Successful tool writes persist even if a later model call fails; inspect inventory before retrying an interrupted write request.
+Tools: `get_inventory`, `get_fridge_status`, `add_inventory_item`, `scan_initial_inventory`, and `get_initial_scan`. The SDK handles model → tool → result → model until a final reply, at most eight turns, with a 60-second timeout. One run is allowed at a time. Each request starts fresh; there is no chat history, automatic trigger, or agent UI yet. Uploaded video scans run separately in background jobs; see below. SDK tracing is disabled. Prompts and tool results are sent to OpenAI when you invoke the endpoint. Successful tool writes persist even if a later model call fails; inspect inventory before retrying an interrupted write request.
 
 ## Runtime
 
@@ -86,3 +86,36 @@ Stop this service before using `pi:run`; restore it after the foreground session
 FFmpeg must be installed on the Pi (`sudo apt-get install ffmpeg v4l-utils`). Check camera formats with `v4l2-ctl --device=/dev/video0 --list-formats-ext` before increasing resolution or frame rate.
 
 Hardware verification: two concurrent streams received JPEG frames, a snapshot succeeded while streaming, the camera process stopped after viewers disconnected, and reconnecting started it again.
+
+## Read-only initial video scan
+
+The Pi accepts an uploaded video and calls OpenRouter `qwen/qwen3.8-flash` using private Hetzner object storage. Scanning never writes to SQLite or changes inventory. No changes to the inventory schema or UI are needed.
+
+Configure `OPENROUTER_API_KEY`, `S3_ENDPOINT=https://fsn1.your-objectstorage.com`, `S3_BUCKET=fridgeai`, `S3_REGION=fsn1`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` in the Pi's existing `.env` (mode 0600). Never commit credentials. FFmpeg and ffprobe must be available on the Pi.
+
+Uploads use private objects under `media/` and signed GET URLs that expire after 24 hours. The bucket must be private; uploads are rejected if a public-read bucket policy is detected. Before upload, the service merges a one-day expiration rule for that prefix into the bucket lifecycle without changing unrelated rules. It also deletes objects older than 24 hours every minute while running, including on startup. Hetzner lifecycle deletion is asynchronous and provides a fallback when the Pi is offline; physical deletion is not guaranteed at the exact 24-hour mark. Versioned buckets also expire noncurrent versions after one day. Cleanup needs list/delete permissions; upload setup needs bucket policy read and lifecycle read/write permissions. Signed media URLs and credentials are never returned in scan results or logged.
+
+Upload raw MP4/MOV bytes (not multipart and not JSON):
+
+```sh
+curl -f http://fridgeai.local:3000/api/videos \
+  -H 'Content-Type: video/quicktime' \
+  --data-binary '@/Users/romanfayzullin/Downloads/IMG_8916.MOV'
+# Returns {"videoId":"..."}
+
+curl -f http://fridgeai.local:3000/api/initial-scans \
+  -H 'Content-Type: application/json' -d '{"videoId":"YOUR_VIDEO_ID"}'
+# Returns HTTP 202 with scanId and status
+
+curl -f http://fridgeai.local:3000/api/initial-scans/YOUR_SCAN_ID
+# Returns processing, completed with result, or failed with error
+
+curl -f http://fridgeai.local:3000/api/initial-scans/YOUR_SCAN_ID/result
+# Returns only {"items":[{"name":"Milk","notes":"One carton."}]}
+```
+
+Agent tools `scan_initial_inventory({videoId})` and `get_initial_scan({scanId})` use this same service. Pass an uploaded videoId in the prompt to `/api/agent/run`; ask for the result in a later request. The agent must never automatically save scanned items. Scan observations returned to the agent are sent to OpenAI as tool results; the video is stored in Hetzner and accessed by OpenRouter’s selected model provider.
+
+Uploads are limited to 512 MiB and videos to 2 seconds–5 minutes. The Pi remuxes the original video stream into an audio-free MP4 without re-encoding. OpenRouter routes the video URL to a video-capable provider; frame sampling is provider-controlled. Names/notes are observations, not guaranteed exhaustive inventory. Use an MP4-compatible video codec such as H.264 or HEVC. One scan and at most two waiting uploads are allowed. Repeating a videoId returns its existing job instead of charging for a duplicate scan.
+
+Local videos are removed after processing or failure; unused uploads and finished results expire after about an hour. Jobs/results live in memory, not SQLite, and are lost on restart. Graceful shutdown removes local videos; after an unclean shutdown, orphan `scan-*` directories in DATA_DIR may need removal. Provider errors are sanitized so credentials and signed URLs are not logged. There are no automatic retries of billable inference calls.

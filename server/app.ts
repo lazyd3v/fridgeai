@@ -8,6 +8,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { DoorSensor, type DoorConfig } from './door.ts';
 import { createAgentLoop } from './agent.ts';
+import { createScans } from './scans.ts';
+import { startMediaCleanup } from './media.ts';
 
 export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig) {
   mkdirSync(dataDir, { recursive: true });
@@ -18,8 +20,11 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const door = new DoorSensor(doorConfig ?? { enabled: false, chip: 'gpiochip0', line: 17, closedLevel: 0, debounceMs: 250 }, open => stream?.setDoor(open));
   door.start();
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: false, stream: stream?.status() ?? null, door: door.status() });
-  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem: store.addItem });
+  const scans = createScans(dataDir);
+  const stopMediaCleanup = startMediaCleanup();
+  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem: store.addItem, scanInitialInventory: scans.start, getInitialScan: scans.get });
   app.use(express.json({ limit: '16kb' }));
+  app.use('/api', scans.router);
   app.get('/api/status', (_req, res) => res.json(getStatus()));
   app.post('/api/agent/run', async (req, res) => {
     const prompt = req.body?.prompt;
@@ -78,5 +83,5 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     res.status(error.status ?? 500).json({ error: error.status === 400 ? 'Invalid JSON request.' : 'Request failed.' });
   });
   const stopCamera = () => { door.close(); stream?.setDoor(false); };
-  return { app, stopCamera, close: () => { stopCamera(); store.close(); } };
+  return { app, stopCamera, close: async () => { stopCamera(); await scans.close(); await stopMediaCleanup(); store.close(); } };
 }

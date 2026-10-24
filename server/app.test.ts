@@ -39,7 +39,7 @@ test('inventory validation, persistence, deletion, and demo snapshots', async ()
     assert.equal((await fetch(`${base}/api/items/${item.id}`, { method: 'DELETE' })).status, 404);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
-    instance.close();
+    await instance.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

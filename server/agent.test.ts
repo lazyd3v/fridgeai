@@ -28,3 +28,21 @@ test('SDK loop executes a tool, feeds the result back, and returns a final answe
     assert.equal(store.listItems()[0].quantity, 2);
   } finally { store.close(); }
 });
+
+test('scan tool returns observations without inventory writes', async () => {
+  let writes = 0;
+  let turns = 0;
+  const calls: string[] = [];
+  const model: Model = {
+    async getResponse(request: ModelRequest): Promise<ModelResponse> {
+      if (++turns === 1) return { usage: new Usage(), output: [{ type: 'function_call', callId: 'scan', name: 'scan_initial_inventory', arguments: JSON.stringify({ videoId: '5ab681ea-f603-43c9-b3bd-0dd3af1108e8' }), status: 'completed' }] };
+      assert.match(JSON.stringify(request.input), /processing/);
+      return { usage: new Usage(), output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Scan started.' }] }] };
+    },
+    async *getStreamedResponse() { throw new Error('Streaming not used'); },
+  };
+  const agent = createFridgeAgent({ getInventory: () => [], getStatus: () => ({}), addItem: () => { writes++; }, scanInitialInventory: () => ({ scanId: 'test', status: 'processing' }), getInitialScan: () => ({ items: [] }) }, calls, model);
+  await new Runner({ tracingDisabled: true }).run(agent, 'Scan the uploaded video only.');
+  assert.equal(writes, 0);
+  assert.deepEqual(calls, ['scan_initial_inventory']);
+});

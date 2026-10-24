@@ -14,5 +14,5 @@ const port = Number(process.env.PORT ?? 3001);
 const server = app.listen(port, host, () => console.log(`Fridge API: http://${host}:${port} · camera: ${mode}`));
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
   stopCamera();
-  server.close(() => { close(); process.exit(0); });
+  server.close(() => { void close().then(() => process.exit(0)); });
 });

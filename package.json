@@ -25,6 +25,8 @@
     "pi:sensor:check": "bash scripts/pi.sh sensor-check"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@openai/agents": "^0.21.0",
     "express": "^5.1.0",
     "react": "^19.1.0",
