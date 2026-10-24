@@ -34,18 +34,36 @@ export class CameraStream {
   private watchdog?: ReturnType<typeof setInterval>;
   private waiters = new Set<(frame?: Buffer) => void>();
   private allowed = true;
+  private sensorAllowed = true;
+  private manual = false;
   private doorOpen = false;
   private retiring?: ChildProcessWithoutNullStreams;
   private retryTimer?: ReturnType<typeof setTimeout>;
+  private frameListeners = new Set<(frame: Buffer) => void>();
+  private faultListeners = new Set<() => void>();
+  onFrame(listener: (frame: Buffer) => void) { this.frameListeners.add(listener); return () => { this.frameListeners.delete(listener); }; }
+  onFault(listener: () => void) { this.faultListeners.add(listener); return () => { this.faultListeners.delete(listener); }; }
   constructor(private config: CameraConfig) {}
 
   status() { return { running: !!this.child, sessionId: this.sessionId, allowed: this.allowed, lastFrameAt: this.lastFrameAt || null, error: this.error, viewers: this.clients.size }; }
 
   setDoor(open: boolean | null) {
-    this.allowed = open === true;
+    this.sensorAllowed = open === true;
+    this.allowed = this.sensorAllowed || this.manual;
     this.doorOpen = open === true;
     if (this.allowed) this.start();
     else this.close();
+  }
+
+  holdForTest() {
+    if (this.manual) throw new Error('A test recording already owns the camera.');
+    this.manual = true; this.allowed = true; this.start();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true; this.manual = false; this.allowed = this.sensorAllowed;
+      if (!this.allowed) this.close(); else this.idle();
+    };
   }
 
   private start() {
@@ -71,6 +89,7 @@ export class CameraStream {
       try {
         for (const frame of parser.push(chunk)) {
           this.latest = frame; this.lastFrameAt = Date.now();
+          for (const listener of this.frameListeners) listener(frame);
           for (const client of this.clients) this.writeFrame(client, frame);
           for (const waiter of [...this.waiters]) waiter(frame);
         }
@@ -81,7 +100,7 @@ export class CameraStream {
       if (this.child !== child) return;
       this.child = undefined;
       clearInterval(this.watchdog);
-      if (this.doorOpen || this.clients.size || this.waiters.size) {
+      if (this.manual || this.doorOpen || this.clients.size || this.waiters.size) {
         this.fail(diagnostics || `Camera stopped (${code}).`);
         if (this.doorOpen) this.retryTimer = setTimeout(() => this.start(), 3000);
       }
@@ -99,6 +118,7 @@ export class CameraStream {
 
   private fail(message: string) {
     this.error = message;
+    for (const listener of this.faultListeners) listener();
     console.error('Camera stream:', message);
     for (const client of this.clients) client.end();
     this.clients.clear();
@@ -107,7 +127,7 @@ export class CameraStream {
   }
 
   private idle() {
-    if (this.doorOpen || this.clients.size || this.waiters.size) return;
+    if (this.manual || this.doorOpen || this.clients.size || this.waiters.size) return;
     clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => this.stop(), 5000);
   }
@@ -144,7 +164,7 @@ export class CameraStream {
       this.retiring = child;
       child.once('close', () => {
         if (this.retiring === child) this.retiring = undefined;
-        if (this.allowed && (this.doorOpen || this.clients.size || this.waiters.size)) {
+        if (this.allowed && (this.manual || this.doorOpen || this.clients.size || this.waiters.size)) {
           this.retryTimer = setTimeout(() => this.start(), this.error ? 3000 : 0);
         }
       });
@@ -157,7 +177,7 @@ export class CameraStream {
   }
 
   close() {
-    this.allowed = false; this.doorOpen = false;
+    this.allowed = false; this.doorOpen = false; this.manual = false;
     for (const client of this.clients) client.end();
     this.clients.clear();
     for (const waiter of [...this.waiters]) waiter();
