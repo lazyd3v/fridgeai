@@ -119,3 +119,22 @@ Agent tools `scan_initial_inventory({videoId})` and `get_initial_scan({scanId})`
 Uploads are limited to 512 MiB and videos to 2 seconds–5 minutes. The Pi remuxes the original video stream into an audio-free MP4 without re-encoding. OpenRouter routes the video URL to a video-capable provider; frame sampling is provider-controlled. Names/notes are observations, not guaranteed exhaustive inventory. Use an MP4-compatible video codec such as H.264 or HEVC. One scan and at most two waiting uploads are allowed. Repeating a videoId returns its existing job instead of charging for a duplicate scan.
 
 Local videos are removed after processing or failure; unused uploads and finished results expire after about an hour. Jobs/results live in memory, not SQLite, and are lost on restart. Graceful shutdown removes local videos; after an unclean shutdown, orphan `scan-*` directories in DATA_DIR may need removal. Provider errors are sanitized so credentials and signed URLs are not logged. There are no automatic retries of billable inference calls.
+
+### UI and private food artwork
+
+The dashboard uses a responsive sidebar, camera view, inventory cards, session activity,
+and a MISO assistant preview. Recipes, shopping, expiry tracking, and assistant chat are
+visibly marked as upcoming. Activity lists changes made in the current browser session;
+it is not a persistent audit log. Inventory remains stored on the Pi.
+
+Purchased food artwork belongs in `public/private-food-icons/`, which is ignored by Git.
+Only selected 128px PNGs are used; the original collection stays outside the repository.
+Keep the license and AI disclosure with that private folder. `FoodIcon` in `src/ui.tsx`
+maps item names to filenames and shows a generic leaf when artwork is absent.
+A fresh checkout works without the purchased assets. To restore them privately, copy the
+corresponding pack's `main/<design>/128.png` to
+`public/private-food-icons/<design>.png` for the mappings listed in `src/ui.tsx`.
+
+The regular Pi sync includes this ignored folder for private runtime use, and Vite copies
+it into the ignored `dist/` build. Do not force-add either the private folder or generated
+build assets to Git, or upload them as a standalone asset collection.

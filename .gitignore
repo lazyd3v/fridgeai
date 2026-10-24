@@ -5,3 +5,7 @@ dist/
 data/
 *.log
 .DS_Store
+
+# Purchased artwork: private local/runtime assets only
+public/private-food-icons/
+Cozy_Food_Icons_400/
