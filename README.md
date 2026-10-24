@@ -4,19 +4,25 @@ A small home fridge tracker. Node.js + Express API, React + Vite interface, Type
 
 For the magnetic door switch, wiring, calibration, and camera control, see [GPIO.md](GPIO.md).
 
-## Run on your Mac
+## Minimal AI agent
 
-Use Node.js 22.13 or newer (Node 22 is pinned in `.nvmrc`).
+The OpenAI Agents SDK runs a tool loop in the Node backend using `gpt-6-luna` through the Responses API. Set `OPENAI_API_KEY` in the server's ignored `.env` file and restart the server. On the Pi, edit `/home/roman/fridge-ai/.env`; local `.env` files are deliberately not synced.
 
 ```sh
-npm install
-cp .env.example .env
-npm run dev
+curl http://fridgeai.local:3000/api/agent/run \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"What is in my fridge, and is the door open?"}'
 ```
 
-Open http://localhost:5173. React updates immediately; the API restarts when backend files change. The API listens on port 3001. If changing that port, also update the Vite proxy in `vite.config.ts`.
+The command connects directly to the Pi over the home network. The response contains `model`, `output`, and a `toolCalls` list. Try `Add two apples to my inventory, then list my inventory` to exercise a write tool. Refresh the existing inventory UI to see changes.
 
-Take a snapshot to load the illustrated demo. Add and remove inventory manually. Data survives restarts in `data/fridge.sqlite`; captured images live in `data/captures/`. Neither is committed. SQLite may print an experimental API warning on Node 22.
+Tools: `get_inventory`, `get_fridge_status`, and `add_inventory_item`. The SDK handles model → tool → result → model until a final reply, at most eight turns, with a 60-second timeout. One run is allowed at a time. Each request starts fresh; there is no chat history, image analysis, automatic trigger, or agent UI yet. SDK tracing is disabled. Prompts and tool results are sent to OpenAI when you invoke the endpoint. Successful tool writes persist even if a later model call fails; inspect inventory before retrying an interrupted write request.
+
+## Runtime
+
+The webserver, React frontend serving, agent loop, database, webcam, and GPIO run on **the Raspberry Pi**. The Mac is used for editing, Git, isolated tests, and browser access. Do not start a local app server on the Mac.
+
+Open http://fridgeai.local:3000 directly on your home network; no Mac server or SSH tunnel is needed. Deployment instructions and agent working rules are in [AGENTS.md](AGENTS.md).
 
 ## Camera modes
 
@@ -30,53 +36,22 @@ Snapshots do not change inventory. Automatic food recognition is not implemented
 
 ## Raspberry Pi workflow
 
-Use Raspberry Pi OS (64-bit recommended), Node.js 22.13+, npm, rsync, and SSH key access. Configure an SSH alias such as `fridge-pi`, or use `username@hostname`.
+The configured target is `roman@fridgeai.local`, with source at `/home/roman/fridge-ai`. Edit locally, then deploy:
 
 ```sh
-cp .pi.env.example .pi.env
-# Edit PI_HOST and PI_DIR for your Pi.
 npm run pi:sync
-npm run pi:setup
+npm run pi:restart
 ```
 
-On the Pi, create `.env` in the app directory using `.env.example`. Set:
+If dependencies changed, run `npm run pi:setup` after syncing and before restarting. It installs from the lockfile on the Pi. `pi:restart` builds on the Pi and restarts the service.
 
-```dotenv
-HOST=0.0.0.0
-PORT=3001
-DATA_DIR=/home/YOUR_USER/fridge-data
-CAMERA_MODE=usb
-CAMERA_DEVICE=/dev/video0
-```
+The Pi's `.env`, SQLite database, captures, and dependencies are excluded from sync. Sync does not delete obsolete files; remove specific renamed/deleted source files on the Pi when required.
 
-Install FFmpeg on the Pi with `sudo apt install ffmpeg`; the app user needs access to the camera device (typically membership in the `video` group, followed by a new login). Start with `CAMERA_MODE=demo` to verify connectivity before connecting a webcam.
-
-Back on your Mac:
-
-```sh
-npm run pi:run
-```
-
-Open `http://fridge-pi.local:3001` using your Pi's actual hostname or IP. Logs stream into your terminal. Ctrl-C stops the development run. The server serves the built React UI and API together.
-
-For each change, run `npm run pi:sync`. Backend changes restart the watching process. For frontend changes, stop and rerun `npm run pi:run` to rebuild; refresh your browser afterward. If dependencies change, stop the app, sync, and rerun `npm run pi:setup` first. Use local `npm run dev` for instant frontend feedback.
-
-Sync is one-way from Mac to Pi and excludes `.env`, `.pi.env`, dependencies, build output, Git, and `data/`. It never uses `--delete`; after renaming or removing a source file, remove the old copy on the Pi explicitly. Keep Pi data outside the code directory as shown above. Do not edit the Pi's source copy directly.
-
-The app has no authentication: bind to localhost during local development, and use LAN access only on a trusted home network. Do not forward its port from your router.
-
-## Run unattended later
-
-`npm run build && npm start` serves the app on port 3001. A systemd template is provided in `deploy/fridge-ai.service.example`. Replace the username, paths, and Node/npm location before copying it to `/etc/systemd/system/fridge-ai.service`, then run:
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now fridge-ai
-```
-
-`journalctl -u fridge-ai -f` follows that system service's logs. `npm run pi:logs` follows the user service used by the POC below. Stop the service before using `pi:run` on the same port. After syncing updates to an unattended installation, rebuild and restart the service.
+For a foreground backend watch session, stop the Pi service, then use `npm run pi:run`, which executes remotely. Restore the service afterward. Frontend changes require a Pi rebuild and browser refresh.
 
 ## Development checks
+
+Isolated checks may run on the Mac; deployment also type-checks and builds on the Pi.
 
 ```sh
 npm run check
@@ -88,13 +63,13 @@ npm run build
 
 ## Current Pi POC
 
-Target: `roman@fridgeai.local`, source in `/home/roman/fridge-ai`, data in `/home/roman/fridge-data`. Node 22 is installed at `/home/roman/.local/opt/node`. The app is bound to **127.0.0.1:3001 on the Pi**; access it through an SSH tunnel:
+Target: `roman@fridgeai.local`, source in `/home/roman/fridge-ai`, data in `/home/roman/fridge-data`. Node 22 is installed at `/home/roman/.local/opt/node`. The app listens on **IPv4 port 3000 on the Pi** at http://fridgeai.local:3000. An optional SSH tunnel provides localhost:3002:
 
 ```sh
 npm run pi:tunnel
 ```
 
-Open http://localhost:3002 on the Mac. The webcam is configured for 1280×720 at 20 FPS using MJPEG passthrough. The app uses the AnkerWork C310's stable `/dev/v4l/by-id/` camera path. USB mode automatically opens the live stream, with pause/reconnect buttons and snapshots. One capture process is shared across viewers; slow viewers skip frames.
+Open http://fridgeai.local:3000 on a device on the same home network. The app has no authentication; keep it on the trusted home network, without router port forwarding. The webcam is configured for 1280×720 at 20 FPS using MJPEG passthrough. The app uses the AnkerWork C310's stable `/dev/v4l/by-id/` camera path. USB mode automatically opens the live stream, with pause/reconnect buttons and snapshots. One capture process is shared across viewers; slow viewers skip frames.
 
 The POC uses `deploy/fridge-ai.user.service` installed under `~/.config/systemd/user/fridge-ai.service`. It is started for this session, **not enabled at boot**. Commands:
 
@@ -106,7 +81,7 @@ npm run pi:logs
 ssh roman@fridgeai.local 'systemctl --user stop fridge-ai'
 ```
 
-Stop this service before using `pi:run`. To work on the local React UI against the real Pi, run `API_TARGET=http://127.0.0.1:3002 npm run dev:web` while the tunnel is open. This gives frontend hot reload with the live Pi API.
+Stop this service before using `pi:run`; restore it after the foreground session. Run all application servers on the Pi.
 
 FFmpeg must be installed on the Pi (`sudo apt-get install ffmpeg v4l-utils`). Check camera formats with `v4l2-ctl --device=/dev/video0 --list-formats-ext` before increasing resolution or frame rate.
 

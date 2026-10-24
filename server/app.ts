@@ -7,6 +7,7 @@ import { CameraStream } from './stream.ts';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { DoorSensor, type DoorConfig } from './door.ts';
+import { createAgentLoop } from './agent.ts';
 
 export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig) {
   mkdirSync(dataDir, { recursive: true });
@@ -16,8 +17,21 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   if (doorConfig?.enabled && !stream) throw new Error('Door sensor requires USB camera mode.');
   const door = new DoorSensor(doorConfig ?? { enabled: false, chip: 'gpiochip0', line: 17, closedLevel: 0, debounceMs: 250 }, open => stream?.setDoor(open));
   door.start();
+  const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: false, stream: stream?.status() ?? null, door: door.status() });
+  const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem: store.addItem });
   app.use(express.json({ limit: '16kb' }));
-  app.get('/api/status', (_req, res) => res.json({ cameraMode: camera.mode, recognitionEnabled: false, stream: stream?.status() ?? null, door: door.status() }));
+  app.get('/api/status', (_req, res) => res.json(getStatus()));
+  app.post('/api/agent/run', async (req, res) => {
+    const prompt = req.body?.prompt;
+    if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) {
+      res.status(400).json({ error: 'Provide a prompt containing 1–4000 characters.' }); return;
+    }
+    try { res.json(await runAgent(prompt.trim())); }
+    catch (error) {
+      const failure = error as Error & { status?: number; toolCalls?: string[] };
+      res.status(failure.status ?? 500).json({ error: failure.message, toolCalls: failure.toolCalls ?? [] });
+    }
+  });
   app.get('/api/camera/stream', (_req, res) => {
     if (!stream) { res.status(409).json({ error: 'Live streaming requires USB camera mode.' }); return; }
     stream.attach(res);

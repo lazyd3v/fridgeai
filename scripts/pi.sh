@@ -31,7 +31,7 @@ case "${1:-}" in
     ssh "$PI_HOST" "export PATH=\"\$HOME/.local/opt/node/bin:\$PATH\"; cd '$PI_DIR' && npm run build && systemctl --user restart fridge-ai"
     ;;
   tunnel)
-    ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 127.0.0.1:3002:127.0.0.1:3001 "$PI_HOST"
+    ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 127.0.0.1:3002:127.0.0.1:3000 "$PI_HOST"
     ;;
   sensor-on|sensor-off)
     sensor_enabled=false

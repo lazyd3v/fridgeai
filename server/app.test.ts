@@ -15,6 +15,7 @@ test('inventory validation, persistence, deletion, and demo snapshots', async ()
   const base = `http://127.0.0.1:${address.port}`;
   const post = (body: unknown) => fetch(`${base}/api/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   try {
+    assert.equal((await fetch(`${base}/api/agent/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: '' }) })).status, 400);
     assert.equal((await post({ name: '  ', quantity: 1 })).status, 400);
     assert.equal((await post({ name: 'Milk', quantity: 0 })).status, 400);
     assert.equal((await post({ name: 'Milk', quantity: 1.5 })).status, 400);

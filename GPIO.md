@@ -68,10 +68,9 @@ Once the readings match:
 
 ```sh
 npm run pi:sensor:on
-npm run pi:tunnel
 ```
 
-Open http://localhost:3002. Bring the magnet close: the UI should say **Door closed · Camera off**. Move it away: **Door open**, followed by live video. Test both positions several times before mounting. The Pi service is not enabled at boot; `pi:sensor:on` restarts/starts it after the wiring reboot. For later reboots, use `ssh roman@fridgeai.local 'systemctl --user start fridge-ai'` and reopen the tunnel.
+Open http://fridgeai.local:3000. Bring the magnet close: the UI should say **Door closed · Camera off**. Move it away: **Door open**, followed by live video. Test both positions several times before mounting. The Pi service is not enabled at boot; `pi:sensor:on` restarts/starts it after the wiring reboot. For later reboots, use `ssh roman@fridgeai.local 'systemctl --user start fridge-ai'` and open the LAN URL.
 
 To return to manual camera control:
 
