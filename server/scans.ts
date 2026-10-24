@@ -17,7 +17,7 @@ export async function prepareVideo(input: string, output: string, signal: AbortS
   const info = JSON.parse(stdout);
   const duration = Number(info.format?.duration);
   if (!Number.isFinite(duration) || duration < 2 || duration > 300 || !info.streams?.some((s: { codec_type: string }) => s.codec_type === 'video')) throw scanError('Provide a video between 2 seconds and 5 minutes.');
-  await exec('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', input, '-map', '0:v:0', '-an', '-c:v', 'copy', '-movflags', '+faststart', '-y', output], { signal, timeout: 120_000, killSignal: 'SIGKILL' });
+  await exec('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', input, '-map', '0:v:0', '-map', '0:a:0?', '-c:a', 'aac', '-b:a', '96k', '-c:v', 'copy', '-movflags', '+faststart', '-y', output], { signal, timeout: 120_000, killSignal: 'SIGKILL' });
 }
 type Job = { scanId: string; status: 'processing' | 'completed' | 'failed'; result?: ScanResult; error?: string; expires: number };
 type Video = { directory: string; path: string; expires: number; scanId?: string };

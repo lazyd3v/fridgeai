@@ -14,7 +14,8 @@ import { DoorSensor, type DoorConfig } from './door.ts';
 import { createAgentLoop } from './agent.ts';
 import { createScans } from './scans.ts';
 import { startMediaCleanup } from './media.ts';
-import { createRecordings } from './recordings.ts';
+import { WebcamAudio } from './microphone.ts';
+import { encodeRecording, createRecordings } from './recordings.ts';
 import { createDebugRecorder } from './debug.ts';
 
 export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig, selectIcon = createIconSelector(availableIcons())) {
@@ -24,11 +25,13 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const app = express();
   const stream = camera.mode === 'usb' ? new CameraStream(camera) : null;
   if (doorConfig?.enabled && !stream) throw new Error('Door sensor requires USB camera mode.');
-  const recordings = createRecordings(dataDir, store, camera.fps ?? 10);
+  const audio = stream ? new WebcamAudio(camera.device, camera.audioDevice) : undefined;
+  const encode = (path: string, fps: number) => encodeRecording(path, fps, audio);
+  const recordings = createRecordings(dataDir, store, camera.fps ?? 10, { encode });
   stream?.onFrame(recordings.frame);
   stream?.onFault(recordings.fault);
   const door = new DoorSensor(doorConfig ?? { enabled: false, chip: 'gpiochip0', line: 17, closedLevel: 0, debounceMs: 250 }, open => { recordings.setDoor(open); stream?.setDoor(open); });
-  const debug = createDebugRecorder(dataDir, stream, camera.fps ?? 10);
+  const debug = createDebugRecorder(dataDir, stream, camera.fps ?? 10, { encode });
   door.start();
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: !!doorConfig?.enabled, recordings: recordings.status(), stream: stream?.status() ?? null, door: door.status() });
   const scans = createScans(dataDir);

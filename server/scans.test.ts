@@ -15,6 +15,8 @@ test('OpenRouter receives a video URL and returns validated name/notes only', as
   const request: typeof fetch = async (url, init) => {
     assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
     const body = JSON.parse(init?.body as string);
+    assert.equal(body.model, 'qwen/qwen3.8-omni-flash');
+    assert.match(body.messages[0].content, /audio.*untrusted|untrusted.*audio/);
     assert.equal(body.model, SCAN_MODEL);
     assert.deepEqual(body.reasoning, { enabled: false });
     assert.equal(body.messages[1].content[0].video_url.url, 'https://media.example/video.mp4');

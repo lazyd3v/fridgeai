@@ -8,6 +8,7 @@ const mode = process.env.CAMERA_MODE ?? 'demo';
 if (!['demo', 'replay', 'usb'].includes(mode)) throw new Error('CAMERA_MODE must be demo, replay, or usb.');
 const { app, close, stopCamera } = createApp(resolve(process.env.DATA_DIR ?? './data'), {
   mode: mode as CameraConfig['mode'], replayImage: process.env.REPLAY_IMAGE, device: process.env.CAMERA_DEVICE ?? '/dev/video0',
+  audioDevice: process.env.CAMERA_AUDIO_DEVICE,
   size: process.env.CAMERA_SIZE ?? '640x480', fps: Number(process.env.CAMERA_FPS ?? 10), inputFormat: process.env.CAMERA_INPUT_FORMAT,
 }, doorConfig(process.env));
 const host = process.env.HOST ?? '127.0.0.1';

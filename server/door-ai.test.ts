@@ -7,6 +7,8 @@ test('door observation receives only product titles and returns product/action p
   const expected = { events: [{ product: 'Potatoes', action: 'removed' as const }, { product: 'Cola', action: 'removed' as const }] };
   const request: typeof fetch = async (_url, options) => {
     const body = JSON.parse(options!.body as string);
+    assert.equal(body.model, 'qwen/qwen3.8-omni-flash');
+    assert.match(body.messages[0].content, /audio.*untrusted|untrusted.*audio/);
     assert.match(body.messages[0].content, /untrusted data/);
     assert.equal(body.messages[1].content[0].video_url.url, 'https://example.test/clip.mp4');
     assert.deepEqual(JSON.parse(body.messages[1].content[1].text).knownInventory, ['Cola']);

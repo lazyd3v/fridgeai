@@ -118,7 +118,7 @@ Hardware verification: two concurrent streams received JPEG frames, a snapshot s
 
 Initial scans retain their original name/notes inventory response and do not receive saved inventory context. Door-session analysis is separate in `server/door-ai.ts`: it receives only product titles and returns product/action pairs. See `GPIO.md` for the door workflow.
 
-The Pi accepts an uploaded video and calls OpenRouter `qwen/qwen3.8-flash` using private Hetzner object storage. Scanning never writes to SQLite or changes inventory. No changes to the inventory schema or UI are needed.
+The Pi accepts an uploaded video and calls OpenRouter `qwen/qwen3.8-omni-flash` using private Hetzner object storage. Scanning never writes to SQLite or changes inventory. No changes to the inventory schema or UI are needed.
 
 Configure `OPENROUTER_API_KEY`, `S3_ENDPOINT=https://fsn1.your-objectstorage.com`, `S3_BUCKET=fridgeai`, `S3_REGION=fsn1`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` in the Pi's existing `.env` (mode 0600). Never commit credentials. FFmpeg and ffprobe must be available on the Pi.
 

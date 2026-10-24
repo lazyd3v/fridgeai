@@ -5,7 +5,7 @@ import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 const exec = promisify(execFile);
-export type CameraConfig = { mode: 'demo' | 'replay' | 'usb'; replayImage?: string; device: string; size?: string; fps?: number; inputFormat?: string };
+export type CameraConfig = { mode: 'demo' | 'replay' | 'usb'; replayImage?: string; device: string; audioDevice?: string; size?: string; fps?: number; inputFormat?: string };
 
 export async function captureImage(config: CameraConfig, directory: string) {
   await mkdir(directory, { recursive: true });

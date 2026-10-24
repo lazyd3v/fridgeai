@@ -1,3 +1,5 @@
+import type { Writable } from 'node:stream';
+import type { AudioSource } from './microphone.ts';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -8,29 +10,60 @@ import { observeDoorVideo, reconcileDoorInventory, movementSchema } from './door
 
 export type Encoder = { write(frame: Buffer): boolean; finish(): Promise<void> };
 // This process reads JPEGs from the one shared camera process, never /dev/video0.
-export function encodeRecording(path: string, fps: number): Encoder {
+export function encodeRecording(path: string, fps: number, audio?: AudioSource): Encoder {
   const child = spawn('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error',
     '-f', 'image2pipe', '-vcodec', 'mjpeg', '-framerate', String(fps), '-i', 'pipe:0',
-    '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '1', '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart', '-n', path]);
-  child.stdout.resume(); child.stderr.resume();
+    ...(audio ? ['-thread_queue_size', '512', '-f', 's16le', '-ar', '48000', '-ac', '1', '-i', 'pipe:3',
+      '-map', '0:v:0', '-map', '1:a:0', '-c:a', 'aac', '-b:a', '96k', '-shortest'] : ['-an']), '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '1', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', '-n', path], { stdio: ['pipe', 'pipe', 'pipe', ...(audio ? ['pipe' as const] : [])] });
+  child.stdout!.resume(); child.stderr!.resume();
   let broken = false;
-  child.stdin.on('error', () => { broken = true; });
+  let audioBytes = 0;
+  let startedAt = 0, frameCount = 0;
+  let lastFrame: Buffer | undefined;
+  const writeFrame = (frame: Buffer) => { child.stdin!.write(frame); frameCount++; };
+  // JPEG pipes have no timestamps: duplicate dropped frames to keep audio in sync.
+  const fillFrames = (target: number) => {
+    while (lastFrame && frameCount < target) {
+      if (child.stdin!.writableLength >= 8 * 1024 * 1024) { broken = true; child.kill('SIGKILL'); return; }
+      writeFrame(lastFrame);
+    }
+  };
+  let releaseAudio: (() => void) | undefined;
+  const audioPipe = child.stdio[3] as Writable | undefined;
+  const failAudio = () => { broken = true; child.kill('SIGKILL'); };
+  audioPipe?.on('error', failAudio);
+  child.stdin!.on('error', () => { broken = true; });
   let finishing: Promise<void> | undefined;
   const done = new Promise<void>((resolve, reject) => {
     child.once('error', () => { broken = true; reject(new Error('Recording encoder unavailable.')); });
-    child.once('close', code => { broken = true; code === 0 ? resolve() : reject(new Error('Recording encoder failed.')); });
+    child.once('close', code => { releaseAudio?.(); broken = true; code === 0 && (!audio || audioBytes > 0) ? resolve() : reject(new Error('Recording encoder or webcam microphone failed.')); });
   });
   // Observe early encoder failure even before the door closes.
   void done.catch(() => {});
   return {
     write(frame) {
-      if (broken || child.stdin.writableLength >= 8 * 1024 * 1024) return false;
-      child.stdin.write(frame); return true;
+      if (audio && !releaseAudio && !broken) {
+        try { startedAt = performance.now(); releaseAudio = audio.subscribe(pcm => {
+          if (!audioPipe || audioPipe.writableLength > 1024 * 1024) { failAudio(); return; }
+          audioBytes += pcm.length; audioPipe.write(pcm);
+        }, failAudio); } catch { failAudio(); }
+      }
+      if (broken || child.stdin!.writableLength >= 8 * 1024 * 1024) return false;
+      if (audio) {
+        const index = Math.round((performance.now() - startedAt) * fps / 1000);
+        fillFrames(index);
+        if (broken) return false;
+        if (frameCount <= index) writeFrame(frame);
+        lastFrame = frame;
+      } else writeFrame(frame);
+      return true;
     },
     finish() {
       if (!finishing) finishing = (async () => {
-        child.stdin.end();
+        if (audio && !broken) fillFrames(Math.ceil((performance.now() - startedAt) * fps / 1000));
+        releaseAudio?.(); releaseAudio = undefined;
+        audioPipe?.end(); child.stdin!.end();
         const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
         try { await done; } finally { clearTimeout(timer); }
       })();

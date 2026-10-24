@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createStore } from './store.ts';
 import { execFileSync } from 'node:child_process';
 import { createRecordings, encodeRecording } from './recordings.ts';
+import { prepareVideo } from './scans.ts';
 import { reconcileMatches, type Movements } from './door-ai.ts';
 
 const observations: Movements = { movements: [{ direction: 'added', name: 'Milk carton', quantity: 2, evidence: 'Two cartons placed inside.' }], uncertainties: [] };
@@ -140,4 +141,40 @@ test('duration limit produces incomplete footage and waits for the next door cyc
     assert.equal(store.listRecordings()[0].status, 'incomplete');
     recordings.setDoor(true); assert.equal(store.listRecordings().length, 1);
   } finally { await recordings.close(); store.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('audio recordings retain AAC through upload preparation; missing microphone fails', async t => {
+  try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); }
+  catch { t.skip('FFmpeg required'); return; }
+  const dir = await mkdtemp(join(tmpdir(), 'audio-recording-'));
+  try {
+    const frame = execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x64', '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', 'pipe:1']);
+    const path = join(dir, 'audio.mp4');
+    let released = false;
+    const encoder = encodeRecording(path, 10, { subscribe(data) {
+      const timer = setInterval(() => {
+        const pcm = Buffer.alloc(9600);
+        for (let i = 0; i < 4800; i++) pcm.writeInt16LE(Math.round(10000 * Math.sin(i * 2 * Math.PI * 440 / 48000)), i * 2);
+        data(pcm);
+      }, 100);
+      return () => { clearInterval(timer); released = true; };
+    } });
+    for (let i = 0; i < 25; i++) {
+      assert.equal(encoder.write(frame), true);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    await encoder.finish();
+    assert.equal(released, true);
+    for (const file of [path, join(dir, 'prepared.mp4')]) {
+      if (file !== path) await prepareVideo(path, file, new AbortController().signal);
+      const probe = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', file], { encoding: 'utf8' }));
+      assert.ok(probe.streams.some((s: { codec_name: string }) => s.codec_name === 'h264'));
+      const audio = probe.streams.find((s: { codec_name: string }) => s.codec_name === 'aac');
+      assert.ok(audio); assert.ok(Number(audio.duration) >= 2);
+    }
+    const failed = encodeRecording(join(dir, 'failed.mp4'), 10, { subscribe() { throw new Error('Microphone missing'); } });
+    assert.equal(failed.write(frame), false);
+    await assert.rejects(failed.finish(), /microphone|encoder/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

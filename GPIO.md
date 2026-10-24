@@ -134,3 +134,9 @@ Open **Debug** in the sidebar (or `/#debug`). Click **Start test recording**, th
 A test recording temporarily overrides the camera's door gate and restores normal sensor control on stop, camera failure, or shutdown. It shares the same camera process as the live preview. It does not itself run Qwen or modify inventory; normal physical door sessions continue separately. Only one test capture/upload runs at a time. Capture stops and uploads automatically after five minutes; an empty or interrupted recording is not uploaded. Navigating away does not stop capture, and reopening Debug restores its current status. Test status/URL is in memory until service restart; local MP4s remain saved. No new storage credentials are required.
 
 Endpoints: `GET /api/debug/recording`, `POST /api/debug/recording/start`, `POST /api/debug/recording/stop`, and `POST /api/debug/recording/retry`. Responses containing signed URLs are marked `Cache-Control: no-store`.
+
+### Webcam recording audio
+
+Door and Debug MP4 recordings include mono AAC audio from the USB webcam microphone. One shared ALSA capture process serves overlapping recordings and stops when recording ends. The microphone is automatically matched to `CAMERA_DEVICE` by its USB device in Linux sysfs. If necessary, set `CAMERA_AUDIO_DEVICE` to the webcam capture name from `arecord -L` (for example `plughw:CARD=Webcam,DEV=0`). Missing or failed microphone capture makes the recording incomplete rather than silently producing a silent clip. The MJPEG live preview remains visual only.
+
+Video analysis uses `qwen/qwen3.8-omni-flash`. Uploaded videos retain their audio. Spoken descriptions can help identify visibly handled products; speech alone does not establish an inventory movement.
