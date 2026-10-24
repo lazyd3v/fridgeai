@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare Tunnel for read-only fridge MCP
+After=network-online.target fridge-ai.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cloudflared tunnel --no-autoupdate run --token-file %h/.config/fridge-mcp/tunnel-token
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+
+# Start manually, matching fridge-ai. Do not enable at boot without approval.

@@ -11,6 +11,7 @@ import { DoorSensor, type DoorConfig } from './door.ts';
 import { createAgentLoop } from './agent.ts';
 import { createScans } from './scans.ts';
 import { startMediaCleanup } from './media.ts';
+import { createFridgeMcpRouter } from './mcp.ts';
 
 export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig, selectIcon = createIconSelector(availableIcons())) {
   mkdirSync(dataDir, { recursive: true });
@@ -26,6 +27,7 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const stopMediaCleanup = startMediaCleanup();
   const runAgent = createAgentLoop({ getInventory: store.listItems, getStatus, addItem, scanInitialInventory: scans.start, getInitialScan: scans.get });
   app.use(express.json({ limit: '16kb' }));
+  app.use('/mcp', createFridgeMcpRouter(store.listItems));
   app.use('/api', scans.router);
   app.get('/api/status', (_req, res) => res.json(getStatus()));
   app.post('/api/agent/run', async (req, res) => {

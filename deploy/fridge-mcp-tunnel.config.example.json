@@ -1,0 +1,19 @@
+{
+  "config": {
+    "ingress": [
+      {
+        "hostname": "fridge-mcp.example.com",
+        "path": "^/mcp/?$",
+        "service": "http://127.0.0.1:3000",
+        "originRequest": {
+          "access": {
+            "required": true,
+            "teamName": "YOUR_ZERO_TRUST_TEAM",
+            "audTag": ["YOUR_ACCESS_APPLICATION_AUD"]
+          }
+        }
+      },
+      { "service": "http_status:404" }
+    ]
+  }
+}

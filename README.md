@@ -18,6 +18,33 @@ The command connects directly to the Pi over the home network. The response cont
 
 Tools: `get_inventory`, `get_fridge_status`, `add_inventory_item`, `scan_initial_inventory`, and `get_initial_scan`. The SDK handles model → tool → result → model until a final reply, at most eight turns, with a 60-second timeout. One run is allowed at a time. Each request starts fresh; there is no chat history, automatic trigger, or agent UI yet. Uploaded video scans run separately in background jobs; see below. SDK tracing is disabled. Prompts and tool results are sent to OpenAI when you invoke the endpoint. Successful tool writes persist even if a later model call fails; inspect inventory before retrying an interrupted write request.
 
+## Fridge MCP server
+
+For authenticated remote access from ChatGPT, see
+[Cloudflare Tunnel and OAuth setup](CLOUDFLARE-MCP.md). The deployed public URL is
+`https://fridge-mcp.example.com/mcp`; Cloudflare Access protects it, and the tunnel
+forwards only the MCP path.
+
+The Pi serves a stateless Streamable HTTP MCP endpoint at
+`http://fridgeai.local:3000/mcp` alongside the existing application. Configure an
+MCP client with that URL using the Streamable HTTP transport. The client must be
+able to reach the Pi on the home network (or use the optional SSH tunnel at
+`http://127.0.0.1:3002/mcp`).
+
+Exactly one tool is exposed: `get_fridge_contents`, displayed as “What's currently
+in my fridge”. It takes no arguments and returns `items`, `retrievedAt` (UTC), and
+`source: "saved_inventory"` as both structured content and JSON text. Each item
+includes its stored ID, name, quantity, notes, icon, and creation timestamp. An
+empty inventory returns `items: []`. Every call reads SQLite afresh; this is the
+saved inventory, not a live camera scan or a guarantee of physical contents.
+The tool does not invoke a model or modify inventory.
+
+The endpoint uses the same Pi process and database as the app, with no separate
+service or port. It shares the app's trusted-home-network access model and has no
+authentication. Deploy with `pi:sync`, `pi:setup` (new dependency), and
+`pi:restart` as described below. GET/SSE subscriptions and DELETE sessions are
+unsupported (HTTP 405); clients initialize and call tools using POST.
+
 ## Runtime
 
 The webserver, React frontend serving, agent loop, database, webcam, and GPIO run on **the Raspberry Pi**. The Mac is used for editing, Git, isolated tests, and browser access. Do not start a local app server on the Mac.
