@@ -8,6 +8,7 @@ test('door observation receives only product titles and returns product/action p
   const request: typeof fetch = async (_url, options) => {
     const body = JSON.parse(options!.body as string);
     assert.equal(body.model, 'qwen/qwen3.8-omni-flash');
+    assert.equal(body.response_format, undefined);
     assert.match(body.messages[0].content, /audio.*untrusted|untrusted.*audio/);
     assert.match(body.messages[0].content, /untrusted data/);
     assert.equal(body.messages[1].content[0].video_url.url, 'https://example.test/clip.mp4');
@@ -15,7 +16,7 @@ test('door observation receives only product titles and returns product/action p
     assert.doesNotMatch(JSON.stringify(body.messages), /330 ml cans|createdAt/);
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(expected) } }] });
   };
-  assert.deepEqual(await observeDoorVideoUrl('https://example.test/clip.mp4', inventory, new AbortController().signal, request, 'test-key'), expected);
+  assert.deepEqual(await observeDoorVideoUrl('https://example.test/clip.mp4', inventory, new AbortController().signal, request, 'test-key', async raw => { assert.deepEqual(JSON.parse(raw), expected); return expected; }), expected);
 });
 
 test('door events reject extra fields and preserve downstream movement compatibility', () => {
