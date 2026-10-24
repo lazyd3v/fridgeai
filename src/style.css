@@ -1087,3 +1087,19 @@ to{
 .activity select{
   max-width:72px;
   padding:6px 7px}
+
+.recordings { margin-top: 24px; }
+.recordings details { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.recordings summary { cursor: pointer; }
+.recordings pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+.recordings button { margin: 12px 8px 0 0; }
+
+.debug-panel { display: grid; gap: 18px; }
+.debug-panel p { margin: 0; line-height: 1.6; }
+.debug-panel > button { justify-self: start; }
+.debug-preview { overflow: hidden; border-radius: var(--radius); background: #18221b; }
+.debug-preview img { display: block; width: 100%; max-height: 420px; object-fit: contain; }
+.debug-result { display: grid; gap: 12px; min-width: 0; }
+.debug-result textarea { width: 100%; resize: vertical; padding: 12px; border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: 12px; overflow-wrap: anywhere; }
+.debug-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.debug-actions a { text-decoration: none; }

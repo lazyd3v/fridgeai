@@ -45,6 +45,14 @@ test('inventory validation, persistence, deletion, and demo snapshots', async ()
     assert.equal((await fetch(`${base}/api/items/${item.id}`, { method: 'DELETE' })).status, 204);
     assert.deepEqual(await (await fetch(`${base}/api/items`)).json(), []);
     assert.equal((await fetch(`${base}/api/items/${item.id}`, { method: 'DELETE' })).status, 404);
+    const history = await (await fetch(`${base}/api/inventory-log`)).json();
+    assert.equal(history.length, 2);
+    assert.equal(history[0].action, 'removed');
+    assert.equal(history[1].action, 'added');
+    assert.equal(history[0].source, 'manual');
+    assert.equal(JSON.parse(history[0].beforeJson).icon, 'milk_bottle');
+    assert.equal(JSON.parse(history[1].afterJson).notes, 'Blue cap');
+    assert.deepEqual(await (await fetch(`${base}/api/recordings`)).json(), []);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await instance.close();

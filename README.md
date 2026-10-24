@@ -98,7 +98,7 @@ npm run pi:tunnel
 
 Open http://fridgeai.local:3000 on a device on the same home network. The app has no authentication; keep it on the trusted home network, without router port forwarding. The webcam is configured for 1280×720 at 20 FPS using MJPEG passthrough. The app uses the AnkerWork C310's stable `/dev/v4l/by-id/` camera path. USB mode automatically opens the live stream, with pause/reconnect buttons and snapshots. One capture process is shared across viewers; slow viewers skip frames.
 
-The POC uses `deploy/fridge-ai.user.service` installed under `~/.config/systemd/user/fridge-ai.service`. It is started for this session, **not enabled at boot**. Commands:
+The POC uses `deploy/fridge-ai.user.service` installed under `~/.config/systemd/user/fridge-ai.service`. It is **enabled at boot**, with user lingering enabled for `roman`, so it starts after power-up without an SSH login. The service automatically restarts on failure. Verify with `systemctl --user is-enabled fridge-ai` and `loginctl show-user roman -p Linger` over SSH. Commands:
 
 ```sh
 ssh roman@fridgeai.local 'systemctl --user start fridge-ai'
@@ -115,6 +115,8 @@ FFmpeg must be installed on the Pi (`sudo apt-get install ffmpeg v4l-utils`). Ch
 Hardware verification: two concurrent streams received JPEG frames, a snapshot succeeded while streaming, the camera process stopped after viewers disconnected, and reconnecting started it again.
 
 ## Read-only initial video scan
+
+Initial scans retain their original name/notes inventory response and do not receive saved inventory context. Door-session analysis is separate in `server/door-ai.ts`: it receives only product titles and returns product/action pairs. See `GPIO.md` for the door workflow.
 
 The Pi accepts an uploaded video and calls OpenRouter `qwen/qwen3.8-flash` using private Hetzner object storage. Scanning never writes to SQLite or changes inventory. No changes to the inventory schema or UI are needed.
 
