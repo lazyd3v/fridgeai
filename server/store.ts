@@ -6,11 +6,12 @@ export function createStore(path: string) {
   db.exec(`PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS items (id TEXT PRIMARY KEY, name TEXT NOT NULL, quantity INTEGER NOT NULL, createdAt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS captures (id TEXT PRIMARY KEY, url TEXT NOT NULL, createdAt TEXT NOT NULL);`);
+  if (!(db.prepare('PRAGMA table_info(items)').all() as { name: string }[]).some(column => column.name === 'notes')) db.exec('ALTER TABLE items ADD COLUMN notes TEXT');
   return {
     listItems: () => db.prepare('SELECT * FROM items ORDER BY createdAt DESC').all(),
-    addItem(name: string, quantity: number) {
-      const item = { id: randomUUID(), name, quantity, createdAt: new Date().toISOString() };
-      db.prepare('INSERT INTO items VALUES (?, ?, ?, ?)').run(item.id, item.name, item.quantity, item.createdAt);
+    addItem(name: string, quantity: number, notes: string | null = null) {
+      const item = { id: randomUUID(), name, quantity, createdAt: new Date().toISOString(), notes };
+      db.prepare('INSERT INTO items (id, name, quantity, createdAt, notes) VALUES (?, ?, ?, ?, ?)').run(item.id, item.name, item.quantity, item.createdAt, item.notes);
       return item;
     },
     removeItem: (id: string) => db.prepare('DELETE FROM items WHERE id = ?').run(id).changes > 0,
