@@ -18,10 +18,12 @@ export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
 const foods: [RegExp, string][] = [[/tomato/i,'tomato'],[/egg(?!plant)/i,'egg'],[/salmon/i,'salmon_fillet'],[/lemon/i,'lemon'],[/cheese/i,'cheese_wedge'],[/yog[hu]urt|yogurt/i,'yogurt'],[/cucumber/i,'cucumber'],[/basil/i,'thai_basil'],[/lettuce|greens|salad/i,'lettuce'],[/milk/i,'milk_bottle'],[/apple/i,'apple'],[/carrot/i,'carrot'],[/chicken/i,'chicken_breast'],[/broccoli/i,'broccoli'],[/spinach/i,'spinach']];
-export function FoodIcon({ name }: { name: string }) {
-  const [failed, setFailed] = useState(false);
-  const asset = foods.find(([pattern]) => pattern.test(name))?.[1];
-  return <span className="food-icon">{asset && !failed ? <img src={`/private-food-icons/${asset}.png`} alt="" onError={() => setFailed(true)} /> : <Icon name="leaf" size={28}/>}</span>;
+export function FoodIcon({ name, icon }: { name: string; icon?: string | null }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  // Old rows have no saved choice. Whole-word matches avoid apple/pineapple collisions.
+  const legacy = foods.find(([pattern]) => new RegExp(`\\b(?:${pattern.source})s?\\b`, 'i').test(name))?.[1];
+  const asset = icon == null ? legacy : icon !== 'none' && /^[a-z][a-z0-9_]*$/.test(icon) ? icon : undefined;
+  return <span className="food-icon">{asset && failed !== asset ? <img src={`/private-food-icons/${asset}.png`} alt="" onError={() => setFailed(asset)} /> : <Icon name="leaf" size={28}/>}</span>;
 }
 export function Miso({ small = false }: { small?: boolean }) {
   return <span className={`miso ${small ? 'miso-small' : ''}`} aria-hidden="true"><span className="miso-eye"/><span className="miso-eye"/><span className="miso-smile"/></span>;

@@ -14,13 +14,14 @@ test('notes migration preserves old inventory and supports new and legacy additi
   old.close();
   try {
     const store = createStore(path);
-    assert.deepEqual({ ...store.listItems()[0] }, { id: 'old', name: 'Eggs', quantity: 6, createdAt: '2026-01-01', notes: null });
-    store.addItem('Milk', 1, 'Blue cap.');
+    assert.deepEqual({ ...store.listItems()[0] }, { id: 'old', name: 'Eggs', quantity: 6, createdAt: '2026-01-01', notes: null, icon: null });
+    store.addItem('Milk', 1, 'Blue cap.', 'milk_bottle');
     store.addItem('Apples', 2);
     store.close();
     const reopened = createStore(path);
-    assert.equal(reopened.listItems().find(item => item.name === 'Milk')?.notes, 'Blue cap.');
+    assert.equal(reopened.listItems().find(item => item.name === 'Milk')?.notes, 'Blue cap.', 'milk_bottle');
     assert.equal(reopened.listItems().find(item => item.name === 'Apples')?.notes, null);
+    assert.equal(reopened.listItems().find(item => item.name === 'Milk')?.icon, 'milk_bottle');
     reopened.close();
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

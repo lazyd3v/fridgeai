@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './style.css';
 import { Icon, FoodIcon, Miso, type IconName } from './ui';
 
-type Item = { id: string; name: string; quantity: number };
+type Item = { id: string; name: string; quantity: number; icon?: string | null };
 type Capture = { id: string; url: string; createdAt: string };
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, options);
@@ -33,10 +33,10 @@ function App() {
   const [cameraAllowed, setCameraAllowed] = useState(true);
   const [page, setPage] = useState('Fridge');
   const [expanded, setExpanded] = useState(false);
-  const [activity, setActivity] = useState<{ id: number; name: string; action: string; time: string }[]>([]);
+  const [activity, setActivity] = useState<{ id: number; name: string; icon?: string | null; action: string; time: string }[]>([]);
   const [filter, setFilter] = useState('All');
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  function record(name: string, action: string) { setActivity(current => [{ id: Date.now(), name, action, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...current].slice(0, 30)); }
+  function record(name: string, action: string, icon?: string | null) { setActivity(current => [{ id: Date.now(), name, icon, action, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }, ...current].slice(0, 30)); }
   useEffect(() => { const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(false); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, []);
   async function load() {
     setError(''); setLoading(true);
@@ -84,13 +84,13 @@ function App() {
     event.preventDefault(); setBusy(true); setError('');
     try {
       const item = await api<Item>('/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, quantity: Number(quantity) }) });
-      setItems(current => [item, ...current]); record(item.name, 'Added'); setName(''); setQuantity('1');
+      setItems(current => [item, ...current]); record(item.name, 'Added', item.icon); setName(''); setQuantity('1');
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
   async function removeItem(id: string) {
     setBusy(true); setError('');
-    try { await api(`/items/${id}`, { method: 'DELETE' }); record(items.find(item => item.id === id)?.name ?? 'Item', 'Removed'); setItems(current => current.filter(item => item.id !== id)); }
+    try { await api(`/items/${id}`, { method: 'DELETE' }); record(items.find(item => item.id === id)?.name ?? 'Item', 'Removed', items.find(item => item.id === id)?.icon); setItems(current => current.filter(item => item.id !== id)); }
     catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
@@ -115,10 +115,10 @@ function App() {
         </section>
         <div className="dashboard-bottom">
           <section className="panel inventory"><div className="section-heading"><h2>Current items</h2><span className="count">{items.length} {items.length === 1 ? 'item' : 'items'}</span></div>
-            <div className="items" aria-live="polite">{loading ? <div className="empty"><p>Checking your shelves…</p></div> : items.length ? items.map(item => <article className="item" key={item.id}><FoodIcon name={item.name}/><div className="item-detail"><h3>{item.name}</h3><p>{item.quantity} {item.quantity === 1 ? 'unit' : 'units'}</p><small><span className="tiny-dot"/> In your fridge</small></div><button className="remove" aria-label={`Remove ${item.name}`} disabled={busy} onClick={() => void removeItem(item.id)}><Icon name="close" size={14}/></button></article>) : <div className="empty"><span className="empty-symbol"><Icon name="leaf" size={28}/></span><h3>A fresh start</h3><p>Add what’s on your shelves.<br/>Good things start with what you have.</p></div>}</div>
+            <div className="items" aria-live="polite">{loading ? <div className="empty"><p>Checking your shelves…</p></div> : items.length ? items.map(item => <article className="item" key={item.id}><FoodIcon name={item.name} icon={item.icon}/><div className="item-detail"><h3>{item.name}</h3><p>{item.quantity} {item.quantity === 1 ? 'unit' : 'units'}</p><small><span className="tiny-dot"/> In your fridge</small></div><button className="remove" aria-label={`Remove ${item.name}`} disabled={busy} onClick={() => void removeItem(item.id)}><Icon name="close" size={14}/></button></article>) : <div className="empty"><span className="empty-symbol"><Icon name="leaf" size={28}/></span><h3>A fresh start</h3><p>Add what’s on your shelves.<br/>Good things start with what you have.</p></div>}</div>
             <form onSubmit={addItem}><label htmlFor="name">Add to your fridge</label><div className="form-row"><input id="name" placeholder="e.g. Tomatoes" maxLength={100} required value={name} onChange={e => setName(e.target.value)}/><input aria-label="Quantity" className="quantity" type="number" min="1" max="999" required value={quantity} onChange={e => setQuantity(e.target.value)}/><button className="primary" disabled={busy || loading || mode === 'connecting'}><Icon name="plus" size={16}/> Add</button></div></form>
           </section>
-          <section className="panel activity"><div className="section-heading"><h2>Recent activity</h2><select aria-label="Filter activity" value={filter} onChange={e => setFilter(e.target.value)}><option>All</option><option>Added</option><option>Removed</option></select></div><p className="section-note">Changes made in this session</p><div className="activity-list">{activity.filter(event => filter === 'All' || event.action === filter).length ? activity.filter(event => filter === 'All' || event.action === filter).map(event => <div className="activity-row" key={event.id}><span className={`activity-arrow ${event.action === 'Removed' ? 'removed' : ''}`}><Icon name="arrow" size={15}/></span><FoodIcon name={event.name}/><div><strong>{event.action} {event.name}</strong><small>Today, {event.time}</small></div></div>) : <div className="empty activity-empty"><Icon name="refresh" size={25}/><h3>{activity.length ? 'Nothing here yet' : 'A quiet kitchen'}</h3><p>{activity.length ? 'No matching changes this session.' : 'Your additions and removals will appear here.'}</p></div>}</div></section>
+          <section className="panel activity"><div className="section-heading"><h2>Recent activity</h2><select aria-label="Filter activity" value={filter} onChange={e => setFilter(e.target.value)}><option>All</option><option>Added</option><option>Removed</option></select></div><p className="section-note">Changes made in this session</p><div className="activity-list">{activity.filter(event => filter === 'All' || event.action === filter).length ? activity.filter(event => filter === 'All' || event.action === filter).map(event => <div className="activity-row" key={event.id}><span className={`activity-arrow ${event.action === 'Removed' ? 'removed' : ''}`}><Icon name="arrow" size={15}/></span><FoodIcon name={event.name} icon={event.icon}/><div><strong>{event.action} {event.name}</strong><small>Today, {event.time}</small></div></div>) : <div className="empty activity-empty"><Icon name="refresh" size={25}/><h3>{activity.length ? 'Nothing here yet' : 'A quiet kitchen'}</h3><p>{activity.length ? 'No matching changes this session.' : 'Your additions and removals will appear here.'}</p></div>}</div></section>
         </div><p className="workspace-footnote">A little care for what’s inside. <span>Freshness tracking is coming soon.</span></p>
       </> : page === 'Settings' ? <section className="panel settings-panel"><h2>Your kitchen connection</h2><p className="muted">Camera and sensor status from your Raspberry Pi.</p><dl><div><dt>Camera source</dt><dd>{mode}</dd></div><div><dt>Door sensor</dt><dd>{door.enabled ? door.state : 'Not enabled'}</dd></div><div><dt>Preview</dt><dd>{live ? 'Enabled' : 'Paused'}</dd></div></dl><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section> : <section className="panel coming-soon"><span className="empty-symbol"><Icon name={page === 'Recipes' ? 'recipes' : 'shopping'} size={32}/></span><span className="eyebrow">A LITTLE SOMETHING IN THE MAKING</span><h2>{page === 'Recipes' ? 'Good food starts here.' : 'Just what you need.'}</h2><p>{page === 'Recipes' ? 'A place for ideas that make the most of your fridge.' : 'A thoughtful shopping list for your next kitchen adventure.'}</p><span className="count">Coming soon</span><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section>}
     </main>
