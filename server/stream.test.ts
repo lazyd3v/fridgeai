@@ -47,3 +47,60 @@ test('camera sessions change after a quick door cycle, even between status polls
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('closing the door while focus restores prevents capture from starting', async () => {
+  const { CameraStream } = await import('./stream.ts');
+  let finish!: () => void;
+  let restores = 0;
+  const stream = new CameraStream({ mode: 'usb', device: '/fake-camera' }, () => {
+    restores++;
+    return new Promise<void>(resolve => { finish = resolve; });
+  });
+  stream.setDoor(true);
+  stream.setDoor(true);
+  assert.equal(restores, 1, 'only one startup can wait for controls');
+  assert.equal(stream.status().running, false);
+  stream.setDoor(false);
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stream.status().running, false);
+  assert.equal(stream.status().sessionId, null);
+  stream.close();
+});
+
+test('debug streams share camera ownership and release the door override on disconnect', async () => {
+  const { CameraStream } = await import('./stream.ts');
+  const { EventEmitter } = await import('node:events');
+  function response() {
+    const result = Object.assign(new EventEmitter(), {
+      set() { return this; }, flushHeaders() {}, end() { result.emit('close'); },
+      write() { return true; }, destroyed: false, writableLength: 0,
+    });
+    return result as unknown as import('express').Response;
+  }
+  // Defer camera startup so this ownership test never opens real hardware.
+  const stream = new CameraStream({ mode: 'usb', device: '/fake-camera' }, () => new Promise(() => {}));
+  stream.setDoor(false);
+  const first = response(), second = response();
+  stream.attachDebug(first); stream.attachDebug(second);
+  assert.equal(stream.status().allowed, true);
+  assert.equal(stream.status().viewers, 2);
+  stream.setDoor(false);
+  assert.equal(stream.status().allowed, true, 'closing door does not interrupt debug preview');
+  const releaseRecording = stream.holdForTest();
+  releaseRecording();
+  assert.equal(stream.status().allowed, true, 'stopping a test recording preserves preview');
+  first.end();
+  assert.equal(stream.status().allowed, true, 'another viewer still holds the camera');
+  second.end();
+  assert.equal(stream.status().allowed, false);
+  assert.equal(stream.status().viewers, 0);
+  const third = response();
+  stream.attachDebug(third);
+  stream.setDoor(true);
+  third.end();
+  assert.equal(stream.status().allowed, true, 'physical door retains control after preview ends');
+  stream.attachDebug(response());
+  stream.close();
+  assert.equal(stream.status().allowed, false, 'shutdown cannot be undone by a disconnect callback');
+});

@@ -1,3 +1,4 @@
+import { availableIcons, createIconSelector } from './icons.ts';
 import { z } from 'zod';
 import type { Item, Store } from './store.ts';
 
@@ -104,7 +105,7 @@ export async function resolveProduct(inventory: Item[], event: ProductEvent, at:
   freshness.needsEstimate = deferred;
   return { result, freshness };
 }
-export async function processFreshnessRecording(store: Store, id: string, movements: { name: string; direction: 'added' | 'removed'; quantity: number; expirationDate?: string | null }[], signal: AbortSignal, resolver: Resolver = resolveWithLuna) {
+export async function processFreshnessRecording(store: Store, id: string, movements: { name: string; direction: 'added' | 'removed'; quantity: number; expirationDate?: string | null }[], signal: AbortSignal, resolver: Resolver = resolveWithLuna, selectIcon = createIconSelector(availableIcons())) {
   const recording = store.recording(id)!;
   let index = 0;
   for (const movement of movements) for (let unit = 0; unit < movement.quantity; unit++, index++) {
@@ -112,8 +113,10 @@ export async function processFreshnessRecording(store: Store, id: string, moveme
     const snapshot = store.listPackages();
     const event = { product: movement.name, action: movement.direction, expirationDate: movement.expirationDate ?? null };
     const resolved = await resolveProduct(snapshot, event, recording.createdAt, signal, resolver);
+    const icon = resolved.result.productId === null && event.action === 'added'
+      ? await selectIcon(resolved.result.product, null) : null;
     signal.throwIfAborted();
-    store.applyProductEvent(id, index, snapshot, event, resolved, recording.createdAt);
+    store.applyProductEvent(id, index, snapshot, event, resolved, recording.createdAt, icon);
   }
   store.setRecording(id, 'completed');
 }

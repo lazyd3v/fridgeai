@@ -36,6 +36,7 @@ export class CameraStream {
   private allowed = true;
   private sensorAllowed = true;
   private manual = false;
+  private previews = new Set<symbol>();
   private doorOpen = false;
   private retiring?: ChildProcessWithoutNullStreams;
   private retryTimer?: ReturnType<typeof setTimeout>;
@@ -43,13 +44,15 @@ export class CameraStream {
   private faultListeners = new Set<() => void>();
   onFrame(listener: (frame: Buffer) => void) { this.frameListeners.add(listener); return () => { this.frameListeners.delete(listener); }; }
   onFault(listener: () => void) { this.faultListeners.add(listener); return () => { this.faultListeners.delete(listener); }; }
-  constructor(private config: CameraConfig) {}
+  private starting = false;
+  private generation = 0;
+  constructor(private config: CameraConfig, private beforeStart?: () => Promise<void>) {}
 
   status() { return { running: !!this.child, sessionId: this.sessionId, allowed: this.allowed, lastFrameAt: this.lastFrameAt || null, error: this.error, viewers: this.clients.size }; }
 
   setDoor(open: boolean | null) {
     this.sensorAllowed = open === true;
-    this.allowed = this.sensorAllowed || this.manual;
+    this.allowed = this.sensorAllowed || this.manual || this.previews.size > 0;
     this.doorOpen = open === true;
     if (this.allowed) this.start();
     else this.close();
@@ -61,14 +64,43 @@ export class CameraStream {
     let released = false;
     return () => {
       if (released) return;
-      released = true; this.manual = false; this.allowed = this.sensorAllowed;
+      released = true; this.manual = false; this.allowed = this.sensorAllowed || this.previews.size > 0;
       if (!this.allowed) this.close(); else this.idle();
     };
   }
 
+  attachDebug(response: Response) {
+    const token = Symbol();
+    this.previews.add(token);
+    this.allowed = true;
+    response.once('close', () => {
+      if (!this.previews.delete(token)) return;
+      this.allowed = this.sensorAllowed || this.manual || this.previews.size > 0;
+      if (!this.allowed) this.close(); else this.idle();
+    });
+    this.attach(response);
+  }
+
   private start() {
     clearTimeout(this.idleTimer);
-    if (!this.allowed || this.child || this.retiring) return;
+    if (!this.allowed || this.child || this.retiring || this.starting) return;
+    if (this.beforeStart) {
+      this.starting = true;
+      const generation = this.generation;
+      void this.beforeStart().then(() => {
+        if (generation !== this.generation) return;
+        this.starting = false;
+        if (this.allowed) this.startCapture();
+      }).catch(error => {
+        if (generation !== this.generation) return;
+        this.starting = false;
+        this.fail(`Could not restore camera focus: ${(error as Error).message}`);
+        if (this.doorOpen) this.retryTimer = setTimeout(() => this.start(), 3000);
+      });
+    } else this.startCapture();
+  }
+
+  private startCapture() {
     this.error = null;
     this.latest = undefined;
     this.lastFrameAt = 0;
@@ -157,6 +189,7 @@ export class CameraStream {
   }
 
   stop() {
+    this.generation++; this.starting = false;
     clearTimeout(this.idleTimer); clearTimeout(this.retryTimer); clearInterval(this.watchdog);
     const child = this.child;
     this.child = undefined; this.latest = undefined;
@@ -178,6 +211,7 @@ export class CameraStream {
 
   close() {
     this.allowed = false; this.doorOpen = false; this.manual = false;
+    this.previews.clear();
     for (const client of this.clients) client.end();
     this.clients.clear();
     for (const waiter of [...this.waiters]) waiter();

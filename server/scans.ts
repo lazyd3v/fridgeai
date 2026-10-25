@@ -22,6 +22,7 @@ export async function prepareVideo(input: string, output: string, signal: AbortS
 type Job = { scanId: string; status: 'processing' | 'completed' | 'failed'; result?: ScanResult; error?: string; expires: number };
 type Video = { directory: string; path: string; expires: number; scanId?: string };
 type Options = {
+  onResult?: (id: string, text: string) => void;
   ready?: () => void;
   prepare?: typeof prepareVideo;
   scan?: (path: string, signal: AbortSignal) => Promise<ScanResult>;
@@ -77,6 +78,9 @@ export function createScans(dataDir: string, options: Options = {}) {
       } finally {
         await rm(video.directory, { recursive: true, force: true }).catch(() => {});
         job.expires = Date.now() + TTL; busy = false;
+        options.onResult?.(job.scanId, job.status === 'completed'
+          ? `I analyzed your uploaded video. Scan results (inventory has not changed):\n\n${job.result?.items.map(item => `- ${item.name}${item.notes ? ` — ${item.notes}` : ''}`).join('\n') || 'No products identified.'}\n\nTell me what to add or correct in your inventory.`
+          : 'I couldn’t finish analyzing your uploaded video. Inventory has not changed. You can tell me what to add or correct here.');
       }
     })());
     return get(job.scanId);

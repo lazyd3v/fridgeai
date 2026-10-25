@@ -50,11 +50,12 @@ test('AI mapping uses observed quantities, matches existing IDs, nets returned i
 test('door starts immediately, shares frames, closes and applies once; rapid reopening queues separately', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'door-recording-'));
   const store = createStore(join(dir, 'test.sqlite'));
-  let encodes = 0, frames = 0, scans = 0;
+  let encodes = 0, frames = 0, scans = 0, iconCalls = 0;
   const recordings = createRecordings(dir, store, 10, {
     encode: () => { encodes++; return { write: () => { frames++; return true; }, finish: async () => {} }; },
     observe: async () => { scans++; return observations; },
     reconcile: async inventory => [{ itemId: inventory[0]?.id ?? null, name: 'Milk', delta: 2, reason: 'Added two cartons' }],
+    selectIcon: async name => { assert.equal(name, 'Milk'); iconCalls++; return 'milk_bottle'; },
   });
   try {
     recordings.setDoor(true); recordings.setDoor(true); assert.equal(encodes, 1);
@@ -62,6 +63,7 @@ test('door starts immediately, shares frames, closes and applies once; rapid reo
     recordings.setDoor(true); recordings.frame(Buffer.from('jpeg')); recordings.setDoor(false);
     await recordings.idle();
     assert.equal(encodes, 2); assert.equal(frames, 2); assert.equal(scans, 2);
+    assert.equal(iconCalls, 1); assert.equal(store.listItems()[0].icon, 'milk_bottle');
     assert.equal(store.listItems()[0].quantity, 4); assert.equal(store.listLog().length, 2);
     assert.ok(store.listRecordings().every(row => row.status === 'completed'));
   } finally { await recordings.close(); store.close(); await rm(dir, { recursive: true, force: true }); }
@@ -89,16 +91,30 @@ test('sensor faults, camera loss, no frames and encoder failures never analyze p
   }
 });
 
-test('restart recovers queued analysis, preserves ordering and never replays committed recordings', async () => {
+test('restart skips failed and incomplete footage, continues after analysis failures and never replays committed recordings', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'door-recovery-'));
   const store = createStore(join(dir, 'test.sqlite'));
+  store.createRecording('failed', '/tmp/failed.mp4'); store.setRecording('failed', 'failed');
+  store.createRecording('interrupted', '/tmp/interrupted.mp4');
   store.createRecording('first', '/tmp/first.mp4'); store.setRecording('first', 'processing');
   store.createRecording('second', '/tmp/second.mp4'); store.setRecording('second', 'queued');
-  let scans = 0;
-  const recordings = createRecordings(dir, store, 10, { observe: async () => { scans++; throw new Error('provider unavailable'); } });
+  const scanned: string[] = [];
+  const recordings = createRecordings(dir, store, 10, {
+    observe: async path => {
+      scanned.push(path);
+      if (path === '/tmp/first.mp4') throw new Error('provider unavailable');
+      return observations;
+    },
+    reconcile: async () => [],
+  });
   try {
     await recordings.idle();
-    assert.equal(scans, 1); assert.equal(store.recording('first')?.status, 'failed'); assert.equal(store.recording('second')?.status, 'queued');
+    assert.deepEqual(scanned, ['/tmp/first.mp4', '/tmp/second.mp4']);
+    assert.equal(store.recording('failed')?.status, 'failed');
+    assert.equal(store.recording('interrupted')?.status, 'incomplete');
+    assert.equal(store.recording('first')?.status, 'failed');
+    assert.equal(store.recording('second')?.status, 'completed');
+    assert.equal(store.nextRecording(), undefined);
     await recordings.close();
     store.setRecording('first', 'queued');
     const recovered = createRecordings(dir, store, 10, { observe: async () => observations, reconcile: async () => [] });
@@ -177,4 +193,23 @@ test('audio recordings retain AAC through upload preparation; missing microphone
     assert.equal(failed.write(frame), false);
     await assert.rejects(failed.finish(), /microphone|encoder/);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('door event feed includes an already-open door and every subsequent opening, without replaying history', () => {
+  const store = createStore(':memory:');
+  try {
+    store.createRecording('old', '/unused'); store.setRecording('old', 'completed');
+    assert.deepEqual(store.recordingStarts().sessions, []);
+    store.createRecording('open-first', '/unused');
+    const initial = store.recordingStarts();
+    assert.deepEqual(initial.sessions.map(session => session.id), ['open-first']);
+    assert.deepEqual(store.recordingStarts(initial.cursor).sessions, []);
+    store.setRecording('open-first', 'queued');
+    store.createRecording('open-again', '/unused');
+    store.setRecording('open-again', 'queued'); // Even a short opening between polls is retained.
+    const next = store.recordingStarts(initial.cursor);
+    assert.deepEqual(next.sessions.map(session => session.id), ['open-again']);
+    assert.deepEqual(store.recordingStarts(next.cursor).sessions, []);
+    assert.deepEqual(store.recordingStarts().sessions, []);
+  } finally { store.close(); }
 });

@@ -1,3 +1,4 @@
+import { publishAnalysisNotifications } from './analysis-notifications.ts';
 import { z } from 'zod';
 import { startFreshnessMaintenance } from './freshness-worker.ts';
 import express from 'express';
@@ -20,6 +21,7 @@ import { startMediaCleanup } from './media.ts';
 import { WebcamAudio } from './microphone.ts';
 import { encodeRecording, createRecordings } from './recordings.ts';
 import { createDebugRecorder } from './debug.ts';
+import { createFocus } from './focus.ts';
 
 export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: DoorConfig, selectIcon = createIconSelector(availableIcons())) {
   mkdirSync(dataDir, { recursive: true });
@@ -27,31 +29,50 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
   const addItem = async (name: string, quantity: number, notes: string | null = null, source = 'manual') => store.addItem(name, quantity, notes, await selectIcon(name, notes), source);
   const stopFreshness = startFreshnessMaintenance(store);
   const app = express();
-  const stream = camera.mode === 'usb' ? new CameraStream(camera) : null;
+  const focus = createFocus(dataDir, camera.device, camera.mode === 'usb');
+  const stream = camera.mode === 'usb' ? new CameraStream(camera, focus.restore) : null;
   if (doorConfig?.enabled && !stream) throw new Error('Door sensor requires USB camera mode.');
   const audio = stream ? new WebcamAudio(camera.device, camera.audioDevice) : undefined;
   const encode = (path: string, fps: number) => encodeRecording(path, fps, audio);
-  const recordings = createRecordings(dataDir, store, camera.fps ?? 10, { encode });
+  const recordings = createRecordings(dataDir, store, camera.fps ?? 10, { encode, selectIcon });
   stream?.onFrame(recordings.frame);
   stream?.onFault(recordings.fault);
   const door = new DoorSensor(doorConfig ?? { enabled: false, chip: 'gpiochip0', line: 17, closedLevel: 0, debounceMs: 250 }, open => { recordings.setDoor(open); stream?.setDoor(open); });
   const debug = createDebugRecorder(dataDir, stream, camera.fps ?? 10, { encode });
   door.start();
   const getStatus = () => ({ cameraMode: camera.mode, recognitionEnabled: !!doorConfig?.enabled, recordings: recordings.status(), stream: stream?.status() ?? null, door: door.status() });
-  const scans = createScans(dataDir);
+  const scans = createScans(dataDir, { onResult: (id, text) => chat.notify(`scan-${id}`, text) });
   const stopMediaCleanup = startMediaCleanup();
   const fridgeTools: import('./agent.ts').FridgeTools = { getInventory: store.listItems, getPackages: store.listPackages, correctFreshness: (id, patch) => store.correctFreshness(id, patch, 'agent'), getStatus, updateItem: store.updateItem, removeItem: id => store.removeItem(id, 'agent'), addItem: (name, quantity, notes) => addItem(name, quantity, notes, 'agent'), scanInitialInventory: scans.start, getInitialScan: scans.get };
   const runAgent = createAgentLoop(fridgeTools);
   const chat = createChat(join(dataDir, 'chat.sqlite'), runAgent);
+  const publishAnalyses = () => {
+    try { publishAnalysisNotifications(store, chat.notify); }
+    catch { console.error('Could not deliver analysis updates; will retry.'); }
+  };
+  publishAnalyses();
+  const analysisTimer = setInterval(publishAnalyses, 1000);
+  analysisTimer.unref();
   app.use('/api', createDictation());
   app.use(express.json({ limit: '512kb' }));
   app.use('/mcp', createFridgeMcpRouter(store.listItems, store));
   app.use('/api', chat.router);
-  const voice = createVoice(fridgeTools, chat.beginVoice);
+  const validateDoor = (id: string) => {
+    const recording = store.recording(id);
+    const result = chat.recordingNotifications(id).at(-1);
+    if (!recording || !result || !result.createdAt || Date.now() - Date.parse(result.createdAt) > 15 * 60_000) throw Object.assign(new Error('Recognition results are not ready or no longer recent.'), { status: 409 });
+  };
+  app.post('/api/speaking-fridge/conversation', (req, res) => {
+    if (typeof req.body?.recordingId !== 'string') { res.sendStatus(400); return; }
+    validateDoor(req.body.recordingId);
+    res.json(chat.prepareDoorConversation(req.body.recordingId));
+  });
+  const voice = createVoice(fridgeTools, chat.beginVoice, undefined, { validate: validateDoor, linkDoor: chat.linkDoor, linkedThread: chat.linkedThread, recordingNotifications: chat.recordingNotifications, subscribeNotifications: chat.subscribeNotifications });
   app.use('/api/voice', voice.router);
   app.use('/api', scans.router);
   app.use('/api', recordings.router);
   app.use('/api/debug/recording', debug.router);
+  app.use('/api/debug/focus', focus.router);
   app.get('/api/inventory-log', (_req, res) => res.json(store.listLog()));
   app.get('/api/status', (_req, res) => res.json(getStatus()));
   app.post('/api/agent/run', async (req, res) => {
@@ -64,6 +85,10 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
       const failure = error as Error & { status?: number; toolCalls?: string[] };
       res.status(failure.status ?? 500).json({ error: failure.message, toolCalls: failure.toolCalls ?? [] });
     }
+  });
+  app.get('/api/debug/stream', (_req, res) => {
+    if (!stream) { res.status(409).json({ error: 'Live streaming requires USB camera mode.' }); return; }
+    stream.attachDebug(res);
   });
   app.get('/api/camera/stream', (_req, res) => {
     if (!stream) { res.status(409).json({ error: 'Live streaming requires USB camera mode.' }); return; }
@@ -122,5 +147,5 @@ export function createApp(dataDir: string, camera: CameraConfig, doorConfig?: Do
     res.status(error.status ?? 500).json({ error: error.status === 400 ? 'Invalid JSON request.' : 'Request failed.' });
   });
   const stopCamera = () => { door.close(); debug.stop('Service stopped during recording.'); recordings.setDoor(null); stream?.setDoor(false); };
-  return { app, stopCamera, close: async () => { stopCamera(); await voice.close(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); await stopFreshness(); chat.close(); store.close(); } };
+  return { app, stopCamera, close: async () => { stopCamera(); await voice.close(); await debug.close(); await recordings.close(); await scans.close(); await stopMediaCleanup(); await stopFreshness(); clearInterval(analysisTimer); publishAnalyses(); chat.close(); store.close(); } };
 }

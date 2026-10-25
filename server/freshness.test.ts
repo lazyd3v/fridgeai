@@ -1,3 +1,4 @@
+import { createIconSelector } from './icons.ts';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -146,4 +147,29 @@ test('a pre-existing failed recording does not block manual product date estimat
     assert.equal(calls, 1);
     assert.equal(store.listItems()[0].freshness!.expirationDate, '2026-11-01');
   } finally { await stop(); store.close(); }
+});
+
+
+test('video additions select and persist Decisions icons; retries and returns preserve them', async () => {
+  const store = createStore(':memory:');
+  let calls = 0;
+  const select = createIconSelector(['banana_bunch'], { apiKey: 'test', fetch: async (_url, init) => {
+    calls++;
+    assert.equal(JSON.parse(JSON.parse(String(init!.body)).input).title, 'Bananas');
+    return Response.json({ answers: [{ name: 'food_icon', type: 'choice', choice: 'banana_bunch' }] });
+  } });
+  try {
+    recording(store, 'icons');
+    const events = [{ name: 'Bananas', direction: 'added' as const, quantity: 1, expirationDate: '2026-11-01' }];
+    await processFreshnessRecording(store, 'icons', events, signal(), forbidden, select);
+    await processFreshnessRecording(store, 'icons', events, signal(), forbidden, select);
+    assert.equal(store.listItems()[0].icon, 'banana_bunch');
+    assert.equal(JSON.parse(String(store.listLog()[0].afterJson)).icon, 'banana_bunch');
+    recording(store, 'return');
+    await processFreshnessRecording(store, 'return', [
+      { name: 'Bananas', direction: 'removed', quantity: 1 }, ...events,
+    ], signal(), forbidden, select);
+    assert.equal(calls, 1);
+    assert.equal(store.listItems()[0].icon, 'banana_bunch');
+  } finally { store.close(); }
 });

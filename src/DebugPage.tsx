@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { FocusControls } from './FocusControls';
+import { WebcamPreview } from './WebcamPreview';
 
 type State = { available: boolean; status: 'idle' | 'recording' | 'uploading' | 'completed' | 'failed'; startedAt?: string; url?: string; expiresAt?: string; error?: string; canRetry?: boolean };
 async function request(action = ''): Promise<State> {
@@ -44,12 +46,11 @@ export function DebugPage() {
   const recording = state?.status === 'recording';
   const uploading = state?.status === 'uploading';
   const seconds = state?.startedAt ? Math.max(0, Math.floor((now - Date.parse(state.startedAt)) / 1000)) : 0;
-  return <section className="panel debug-panel">
+  return <><WebcamPreview /><FocusControls /><section className="panel debug-panel">
     <div className="section-heading"><h2>Test video</h2><span className="badge" role="status">{recording ? `Recording · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : uploading ? 'Saving and uploading…' : state?.status === 'completed' ? 'Uploaded' : state?.status === 'failed' ? 'Failed' : state ? 'Ready' : 'Connecting…'}</span></div>
     <p>Start recording with the Pi camera, then press the same button to stop and upload the video to Hetzner.</p>
     <p className="muted">Test capture temporarily keeps the camera on, including when the door is closed. It stops automatically after five minutes. Leaving this page does not stop recording.</p>
     {state && !state.available && <p role="status">Connect the Pi USB camera to record a test video.</p>}
-    {recording && <div className="debug-preview"><img src="/api/camera/stream?debug=1" alt="Live test recording preview" /></div>}
     <button className="primary" disabled={busy || !state?.available || uploading} onClick={() => void act(recording ? 'stop' : 'start')}>{busy ? 'Please wait…' : recording ? 'Stop recording & upload' : uploading ? 'Uploading…' : 'Start test recording'}</button>
     {state?.canRetry && <button className="secondary" disabled={busy} onClick={() => void act('retry')}>Retry upload</button>}
     {(error || connectionError || state?.error) && <p className="error" role="alert">{error || connectionError || state?.error}</p>}
@@ -59,5 +60,5 @@ export function DebugPage() {
       <div className="debug-actions"><a className="secondary" href={state.url} target="_blank" rel="noreferrer">Open video</a><button className="secondary" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy URL'}</button></div>
       <p className="muted">Available until approximately {new Date(state.expiresAt!).toLocaleString()}. Anyone with this signed link can view the video until it expires.</p>
     </div>}
-  </section>;
+  </section></>;
 }

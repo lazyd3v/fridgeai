@@ -1,3 +1,4 @@
+import type { SpeakingFridgeMode } from './SummarySpeech';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssistantRuntimeProvider, ComposerPrimitive, ThreadPrimitive, MessagePrimitive, AuiIf, ExportedMessageRepository, type ToolCallMessagePartProps } from '@assistant-ui/react';
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown';
@@ -15,12 +16,51 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!response.ok) throw new Error(data.error ?? 'Could not connect to MISO.');
   return data;
 }
+// Preserve unfinished text when an automatic call rolls over to a new conversation.
+const drafts = new Map<string, string>();
 const starters = ['Suggest me what to cook tonight', 'What’s in my fridge?', 'Help me update my inventory'];
-export function Assistant() {
+export function Assistant({ speakingFridge }: { speakingFridge: SpeakingFridgeMode }) {
   const [threads, setThreads] = useState<Summary[]>([]);
   const [thread, setThread] = useState<Thread | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState('');
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
+  const [doorRequest, setDoorRequest] = useState<{ recordingId: string; threadId: string } | null>(null);
+  const state = useRef({ busy, thread, voiceStatus, doorRequest, ready: speakingFridge.ready }); state.current = { busy, thread, voiceStatus, doorRequest, ready: speakingFridge.ready };
+  useEffect(() => {
+    if (!speakingFridge.enabled) { setDoorRequest(null); return; }
+    let cancelled = false, polling = false;
+    let cursor: number | null = null;
+    const waiting: { id: string; createdAt: string }[] = [];
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const feed = await request<{ cursor: number; results: { recordingId: string; createdAt: string }[] }>(`/speaking-fridge/results${cursor === null ? '' : `?after=${cursor}`}`);
+        if (cancelled) return;
+        cursor = feed.cursor;
+        for (const result of feed.results) {
+          const queued = waiting.find(item => item.id === result.recordingId);
+          if (queued) queued.createdAt = result.createdAt;
+          else waiting.push({ id: result.recordingId, createdAt: result.createdAt });
+        }
+        while (waiting.length && Date.now() - Date.parse(waiting[0].createdAt) > 15 * 60_000) waiting.shift();
+        const current = state.current;
+        if (!current.ready || !waiting.length || current.doorRequest || !current.thread || current.thread.busy || ['connecting', 'ending'].includes(current.voiceStatus) || (current.busy && current.voiceStatus === 'idle')) return;
+        const recordingId = waiting[0].id;
+        if (current.voiceStatus !== 'idle') {
+          setDoorRequest({ recordingId, threadId: current.thread.id }); waiting.shift(); return;
+        }
+        const target = await request<Thread>('/speaking-fridge/conversation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recordingId }) });
+        if (cancelled || state.current.busy) return;
+        setThread(target); setThreads(list => list.some(item => item.id === target.id) ? list : [target, ...list]);
+        setDoorRequest({ recordingId, threadId: target.id }); waiting.shift();
+      } catch (e) { if (!cancelled) setError(`Speaking fridge: ${(e as Error).message}`); }
+      finally { polling = false; }
+    };
+    void poll(); const timer = setInterval(() => void poll(), 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [speakingFridge.enabled]);
   const initial = useRef<Promise<{ list: Summary[]; current: Thread }> | null>(null);
   async function refreshList() { setThreads(await request<Summary[]>('/threads')); }
   useEffect(() => {
@@ -39,6 +79,26 @@ export function Assistant() {
     const timer = setInterval(() => { void request<Thread>(`/threads/${id}`).then(setThread).catch(() => setError('Connection lost. Reload to recover the conversation.')); }, 2000);
     return () => clearInterval(timer);
   }, [thread?.id, thread?.busy]);
+  useEffect(() => {
+    if (!thread?.id) return;
+    void fetch(`/api/threads/${thread.id}/activate`, { method: 'POST' });
+  }, [thread?.id]);
+  useEffect(() => {
+    if (busy || !thread || thread.busy) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void request<Summary[]>('/threads').then(async list => {
+        // A new automatic conversation (including the one-hour rollover) becomes visible.
+        const newest = list[0];
+        const created = newest && !threads.some(item => item.id === newest.id);
+        const current = created ? await request<Thread>(`/threads/${newest.id}`) : null;
+        if (cancelled) return;
+        setThreads(list);
+        if (current) setThread(current);
+      }).catch(() => {});
+    }, 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [busy, thread, threads]);
   async function choose(id: string) {
     if (busy || thread?.busy) return;
     setBusy(true); setError('');
@@ -50,7 +110,7 @@ export function Assistant() {
     <div className="assistant-heading"><h2>MISO</h2><button className="new-chat" disabled={busy || !!thread?.busy} onClick={() => void choose('')}><Icon name="plus" size={15}/> New chat</button></div>
     {thread && <select className="thread-picker" aria-label="Conversation" value={thread.id} disabled={busy || thread.busy} onChange={event => void choose(event.target.value)}>{threads.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select>}
     {error && <p className="chat-error" role="alert">{error}</p>}
-    {thread?.busy ? <p role="status" className="chat-thinking">MISO is finishing your reply. Reconnecting…</p> : thread ? <ChatThread key={thread.id} thread={thread} onBusy={setBusy} onFinished={() => { void refreshList().catch(() => setError('Could not refresh conversations.')); }}/> : <p role="status">Connecting to MISO…</p>}
+    {thread?.busy ? <p role="status" className="chat-thinking">MISO is finishing your reply. Reconnecting…</p> : thread ? <ChatThread key={thread.id} thread={thread} speakingFridge={speakingFridge} doorRequest={doorRequest?.threadId === thread.id ? doorRequest.recordingId : null} onDoorHandled={id => setDoorRequest(current => current?.recordingId === id ? null : current)} onVoiceStatus={setVoiceStatus} onBusy={setBusy} onFinished={() => { void refreshList().catch(() => setError('Could not refresh conversations.')); }}/> : <p role="status">Connecting to MISO…</p>}
   </aside>;
 }
 function ToolProgress({ toolName, result }: ToolCallMessagePartProps) {
@@ -64,13 +124,15 @@ function AssistantMessage() {
 function UserMessage() {
   return <MessagePrimitive.Root className="chat-message chat-user"><span className="chat-author">You</span><div><MessagePrimitive.Parts/></div></MessagePrimitive.Root>;
 }
-function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (busy: boolean) => void; onFinished: () => void }) {
+function ChatThread({ thread, onBusy, onFinished, speakingFridge, doorRequest, onDoorHandled, onVoiceStatus }: { thread: Thread; onBusy: (busy: boolean) => void; onFinished: () => void; speakingFridge: SpeakingFridgeMode; doorRequest: string | null; onDoorHandled: (id: string) => void; onVoiceStatus: (status: VoiceStatus) => void }) {
   const [error, setError] = useState('');
   const [voice, setVoice] = useState<'idle' | 'starting' | 'recording' | 'transcribing'>('idle');
   const [conversation, setConversation] = useState<VoiceStatus>('idle');
   const [spoken, setSpoken] = useState({ user: '', assistant: '' });
   const [audioBlocked, setAudioBlocked] = useState(false);
   const voiceConversation = useRef<ReturnType<typeof startVoiceConversation> | null>(null);
+  const proactiveCall = useRef(false);
+  const consumedDoors = useRef(new Set<string>());
   const [voiceHelp, setVoiceHelp] = useState(false);
   const [running, setRunning] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -102,19 +164,57 @@ function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (b
       voiceConversation.current?.stop();
     };
   }, []);
+  useEffect(() => { onVoiceStatus(conversation); }, [conversation, onVoiceStatus]);
+  useEffect(() => {
+    const saved = drafts.get(thread.id);
+    if (saved) runtime.thread.composer.setText(saved);
+    return runtime.thread.composer.subscribe(() => {
+      const text = runtime.thread.composer.getState().text;
+      if (text) drafts.set(thread.id, text); else drafts.delete(thread.id);
+    });
+  }, [runtime, thread.id]);
+  useEffect(() => {
+    if (!speakingFridge.ready && proactiveCall.current) voiceConversation.current?.stop();
+  }, [speakingFridge.ready]);
   const disabled = running || voice !== 'idle' || conversation !== 'idle';
-  function talk() {
-    if (conversation !== 'idle') { voiceConversation.current?.stop(); return; }
+  const lastSaved = useRef(JSON.stringify(thread.messages));
+  useEffect(() => {
+    if (disabled) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const saved = await request<Thread>(`/threads/${thread.id}`);
+        if (cancelled || saved.busy || runtime.thread.getState().isRunning) return;
+        const signature = JSON.stringify(saved.messages);
+        if (signature === lastSaved.current) return;
+        lastSaved.current = signature;
+        runtime.thread.import(ExportedMessageRepository.fromArray(fromAgUiMessages(saved.messages.map(message => ({ id: message.id, role: message.role, content: message.text })))));
+      } catch { /* Reconnect on the next poll without interrupting a draft. */ }
+    };
+    void sync();
+    const timer = setInterval(() => void sync(), 2000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [disabled, runtime, thread.id]);
+  function talk(recordingId?: string) {
+    if (conversation !== 'idle') {
+      if (recordingId) { proactiveCall.current = true; void voiceConversation.current?.doorOpened(recordingId).catch(e => setError(e.message)); }
+      else voiceConversation.current?.stop();
+      return;
+    }
     if (disabled) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') { setVoiceHelp(true); return; }
     setError(''); setSpoken({ user: '', assistant: '' }); setAudioBlocked(false);
+    proactiveCall.current = !!recordingId;
     voiceConversation.current = startVoiceConversation({
-      threadId: thread.id,
+      threadId: thread.id, recordingId,
+      microphone: recordingId ? speakingFridge.microphone : null,
+      audio: recordingId ? speakingFridge.audio : null,
       onStatus: state => { if (active.current) setConversation(state); },
       onTranscript: (role, text) => { if (active.current) setSpoken(previous => ({ ...previous, [role]: text })); },
       onError: message => { if (active.current) setError(message); },
       onAudioBlocked: blocked => { if (active.current) setAudioBlocked(blocked); },
       onEnd: () => {
+        voiceConversation.current = null; proactiveCall.current = false;
         if (!active.current) return;
         void request<Thread>(`/threads/${thread.id}`).then(saved => {
           if (active.current) runtime.thread.import(ExportedMessageRepository.fromArray(fromAgUiMessages(saved.messages.map(message => ({ id: message.id, role: message.role, content: message.text })))));
@@ -123,6 +223,15 @@ function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (b
       },
     });
   }
+  useEffect(() => {
+    if (!doorRequest || !speakingFridge.ready || consumedDoors.current.has(doorRequest) || ['connecting', 'ending'].includes(conversation) || running || voice !== 'idle') return;
+    // Delay until mount effects settle, so StrictMode does not start and immediately cancel a call.
+    const timer = setTimeout(() => {
+      consumedDoors.current.add(doorRequest);
+      talk(doorRequest); onDoorHandled(doorRequest);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [doorRequest, speakingFridge.ready, conversation, running, voice]);
   async function transcribe(blob: Blob) {
     setVoice('transcribing'); setError('');
     try {
@@ -158,15 +267,16 @@ function ChatThread({ thread, onBusy, onFinished }: { thread: Thread; onBusy: (b
       {voiceHelp && <div className="voice-help">For microphone access, open the app through the localhost SSH tunnel or HTTPS. Here you can upload a voice recording or use your keyboard’s dictation.<button disabled={disabled} onClick={() => fileInput.current?.click()}>Upload voice recording</button></div>}
       {voice !== 'idle' && <p className="voice-status" role="status">{voice === 'recording' ? 'Listening… Text appears as you speak. Tap stop when done.' : voice === 'starting' ? 'Connecting your microphone…' : 'Finalizing your transcript…'}</p>}
       {conversation !== 'idle' && <div className="voice-conversation" aria-label="Live voice conversation">
-        <p role="status"><span className="voice-dot"/>{conversation === 'connecting' ? 'Connecting to MISO…' : conversation === 'speaking' ? 'MISO is speaking · You can interrupt' : conversation === 'thinking' ? 'MISO is thinking…' : 'Listening · Speak naturally'}</p>
-        <small>You’re talking with an AI voice. Tap the phone to end.</small>
+        <p role="status"><span className="voice-dot"/>{conversation === 'ending' ? 'Ending call…' : conversation === 'connecting' ? 'Connecting to MISO…' : conversation === 'speaking' ? 'MISO is speaking · You can interrupt' : conversation === 'thinking' ? 'MISO is thinking…' : 'Listening · Speak naturally'}</p>
+        <small>You’re talking with an AI voice. Confirm the summary or ask for a correction. Say “all good, bye” to finish.</small>
         {spoken.user && <p className="voice-caption"><strong>You</strong> {spoken.user}</p>}
         {spoken.assistant && <p className="voice-caption"><strong>MISO</strong> {spoken.assistant}</p>}
+        <button type="button" className="secondary" onClick={() => voiceConversation.current?.stop()}>End call</button>
         {audioBlocked && <button type="button" onClick={() => void voiceConversation.current?.resumeAudio()}>Enable audio</button>}
       </div>}
       <ComposerPrimitive.Root className="composer">
         <ComposerPrimitive.Input aria-label="Message MISO" placeholder="Ask MISO about your fridge…" rows={2} maxLength={4000} disabled={disabled}/>
-        <div className="composer-actions"><button type="button" className={voice === 'recording' ? 'recording' : ''} disabled={voice !== 'recording' && voice !== 'starting' && disabled} onClick={() => void dictate()} aria-label={voice === 'starting' ? 'Cancel dictation' : voice === 'recording' ? 'Stop dictation' : 'Dictate a message'} title="Dictate a message">{voice === 'recording' ? <span>■</span> : <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>}</button><button type="button" className={conversation !== 'idle' ? 'voice-call active' : 'voice-call'} disabled={conversation === 'idle' && disabled} onClick={talk} aria-label={conversation !== 'idle' ? 'End voice conversation' : 'Talk to MISO'} title={conversation !== 'idle' ? 'End voice conversation' : 'Talk to MISO'}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg></button><ComposerPrimitive.Send className="chat-send" aria-label="Send message" disabled={disabled}><Icon name="send" size={18}/></ComposerPrimitive.Send></div>
+        <div className="composer-actions"><button type="button" className={voice === 'recording' ? 'recording' : ''} disabled={voice !== 'recording' && voice !== 'starting' && disabled} onClick={() => void dictate()} aria-label={voice === 'starting' ? 'Cancel dictation' : voice === 'recording' ? 'Stop dictation' : 'Dictate a message'} title="Dictate a message">{voice === 'recording' ? <span>■</span> : <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>}</button><button type="button" className={conversation !== 'idle' ? 'voice-call active' : 'voice-call'} disabled={conversation === 'idle' && disabled} onClick={() => talk()} aria-label={conversation !== 'idle' ? 'End voice conversation' : 'Talk to MISO'} title={conversation !== 'idle' ? 'End voice conversation' : 'Talk to MISO'}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg></button><ComposerPrimitive.Send className="chat-send" aria-label="Send message" disabled={disabled}><Icon name="send" size={18}/></ComposerPrimitive.Send></div>
       </ComposerPrimitive.Root>
       <input hidden ref={fileInput} type="file" accept="audio/*,.m4a,.mp4,.webm" onChange={event => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ''; }}/>
       <small>Your fridge, a little more inspired.</small>

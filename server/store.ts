@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 
 export type Item = { id: string; name: string; quantity: number; createdAt: string; notes?: string | null; icon?: string | null; freshness?: Freshness };
-export type InventoryChange = { itemId: string | null; name: string; delta: number; reason: string };
+export type InventoryChange = { itemId: string | null; name: string; delta: number; reason: string; icon?: string | null };
 export type Recording = { id: string; path: string; status: string; createdAt: string; error: string | null; observations: string | null };
 export function createStore(path: string) {
   const db = new DatabaseSync(path);
@@ -20,6 +20,11 @@ export function createStore(path: string) {
     catch (error) { db.exec('ROLLBACK'); throw error; }
   }
   db.exec('CREATE TABLE IF NOT EXISTS recording_events (recordingId TEXT NOT NULL, eventIndex INTEGER NOT NULL, result TEXT NOT NULL, PRIMARY KEY(recordingId, eventIndex))');
+  // Durable outbox: created in the same transaction as each analysis status change.
+  db.exec(`CREATE TABLE IF NOT EXISTS analysis_notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, recordingId TEXT NOT NULL, status TEXT NOT NULL, logThrough INTEGER NOT NULL);
+    CREATE TRIGGER IF NOT EXISTS recording_analysis_notification AFTER UPDATE OF status ON recordings
+    WHEN NEW.status IN ('completed', 'failed', 'incomplete') AND NEW.status != OLD.status
+    BEGIN INSERT INTO analysis_notifications (recordingId, status, logThrough) VALUES (NEW.id, NEW.status, COALESCE((SELECT MAX(rowid) FROM inventory_log), 0)); END;`);
   const decode = (row: unknown): Item => { const item = row as Item & { freshness: string }; return { ...item, freshness: item.freshness ? JSON.parse(item.freshness) : initialFreshness(true) }; };
   const listPackages = () => db.prepare('SELECT * FROM items ORDER BY createdAt DESC, id').all().map(decode);
   const saveFreshness = (id: string, value: Freshness) => db.prepare('UPDATE items SET freshness = ? WHERE id = ?').run(JSON.stringify(value), id);
@@ -42,6 +47,9 @@ export function createStore(path: string) {
     return { ...item, freshness };
   }
   return {
+    analysisNotifications: () => db.prepare('SELECT * FROM analysis_notifications ORDER BY id').all() as { id: number; recordingId: string; status: string; logThrough: number }[],
+    acknowledgeAnalysis: (id: number) => db.prepare('DELETE FROM analysis_notifications WHERE id = ?').run(id),
+    recordingLog: (id: string, logThrough: number) => db.prepare('SELECT beforeJson, afterJson, reason FROM inventory_log WHERE recordingId = ? AND rowid <= ? ORDER BY rowid').all(id, logThrough),
     listItems,
     listPackages,
     expireTakenOut: (now = new Date().toISOString()) => transaction(() => {
@@ -88,7 +96,7 @@ export function createStore(path: string) {
       saveFreshness(expected.id, freshness); log(expected, { ...expected, freshness }, 'estimate', null, 'Freshness estimate updated'); return true;
     }),
     eventApplied: (id: string, index: number) => !!db.prepare('SELECT 1 FROM recording_events WHERE recordingId = ? AND eventIndex = ?').get(id, index),
-    applyProductEvent: (id: string, index: number, expected: Item[], event: ProductEvent, resolved: Awaited<ReturnType<typeof resolveProduct>>, at: string) => transaction(() => {
+    applyProductEvent: (id: string, index: number, expected: Item[], event: ProductEvent, resolved: Awaited<ReturnType<typeof resolveProduct>>, at: string, icon: string | null = null) => transaction(() => {
       if (db.prepare('SELECT 1 FROM recording_events WHERE recordingId = ? AND eventIndex = ?').get(id, index)) return;
       if (db.prepare('SELECT status FROM recordings WHERE id = ?').get(id)?.status !== 'processing') throw new Error('Recording is not processing.');
       if (JSON.stringify(listPackages()) !== JSON.stringify(expected)) throw new Error('Inventory changed; retry recording.');
@@ -106,7 +114,7 @@ export function createStore(path: string) {
         db.prepare('UPDATE items SET createdAt = ? WHERE id = ?').run(before.createdAt, split.id);
         before = { ...split, createdAt: before.createdAt, freshness: before.freshness };
       }
-      const item = before ?? insert(result.product, 1);
+      const item = before ?? insert(result.product, 1, null, icon);
       if (!before) db.prepare('UPDATE items SET createdAt = ? WHERE id = ?').run(at, item.id);
       freshness.state = event.action === 'removed' ? 'taken_out' : 'in_fridge';
       freshness.finishReason = null;
@@ -138,9 +146,16 @@ export function createStore(path: string) {
     createRecording(id: string, path: string) {
       db.prepare('INSERT INTO recordings VALUES (?, ?, ?, ?, NULL, NULL)').run(id, path, 'recording', new Date().toISOString());
     },
+    recordingStarts: (after?: number) => {
+      const latest = Number(db.prepare('SELECT COALESCE(MAX(rowid), 0) AS cursor FROM recordings').get()!.cursor);
+      const sessions = after === undefined
+        ? db.prepare("SELECT rowid AS sequence, id, createdAt FROM recordings WHERE status = 'recording' ORDER BY rowid").all()
+        : db.prepare('SELECT rowid AS sequence, id, createdAt FROM recordings WHERE rowid > ? ORDER BY rowid LIMIT 50').all(after);
+      return { cursor: after === undefined ? latest : sessions.length ? Number(sessions.at(-1)!.sequence) : latest, sessions };
+    },
     recording: (id: string) => db.prepare('SELECT * FROM recordings WHERE id = ?').get(id) as Recording | undefined,
     listRecordings: () => db.prepare('SELECT * FROM recordings ORDER BY rowid DESC LIMIT 100').all() as Recording[],
-    nextRecording: () => db.prepare("SELECT * FROM recordings WHERE status NOT IN ('completed', 'dismissed') ORDER BY rowid LIMIT 1").get() as Recording | undefined,
+    nextRecording: () => db.prepare("SELECT * FROM recordings WHERE status IN ('recording', 'queued', 'processing') ORDER BY rowid LIMIT 1").get() as Recording | undefined,
     pendingRecordings: () => db.prepare("SELECT * FROM recordings WHERE status = 'queued' ORDER BY rowid").all() as Recording[],
     setRecording(id: string, status: string, error: string | null = null, observations?: unknown) {
       db.prepare('UPDATE recordings SET status = ?, error = ?, observations = COALESCE(?, observations) WHERE id = ?').run(status, error, observations === undefined ? null : JSON.stringify(observations), id);
@@ -163,7 +178,7 @@ export function createStore(path: string) {
           touched.add(key);
           if (!change.itemId) {
             if (change.delta < 1 || expected.some(item => item.name.toLowerCase() === change.name.trim().toLowerCase())) throw new Error('Invalid new item.');
-            const after = insert(change.name, change.delta); log(null, after, 'door-video', id, change.reason);
+            const after = insert(change.name, change.delta, null, change.icon ?? null); log(null, after, 'door-video', id, change.reason);
           } else {
             const before = expected.find(item => item.id === change.itemId);
             if (!before) throw new Error('Unknown inventory item.');

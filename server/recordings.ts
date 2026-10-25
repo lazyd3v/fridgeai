@@ -1,3 +1,4 @@
+import { availableIcons, createIconSelector } from './icons.ts';
 import { processFreshnessRecording } from './freshness.ts';
 import type { Writable } from 'node:stream';
 import type { AudioSource } from './microphone.ts';
@@ -72,8 +73,9 @@ export function encodeRecording(path: string, fps: number, audio?: AudioSource):
     },
   };
 }
-type Options = { encode?: typeof encodeRecording; observe?: typeof observeDoorVideo; reconcile?: typeof reconcileDoorInventory; maxDurationMs?: number };
+type Options = { selectIcon?: ReturnType<typeof createIconSelector>; encode?: typeof encodeRecording; observe?: typeof observeDoorVideo; reconcile?: typeof reconcileDoorInventory; maxDurationMs?: number };
 export function createRecordings(dataDir: string, store: Store, fps: number, options: Options = {}) {
+  const selectIcon = options.selectIcon ?? createIconSelector(availableIcons());
   const directory = join(dataDir, 'recordings');
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   store.recoverRecordings();
@@ -88,25 +90,28 @@ export function createRecordings(dataDir: string, store: Store, fps: number, opt
     if (closed || processing) return;
     processing = (async () => {
       while (!closed) {
-        // A failed earlier session blocks later sessions to preserve event order.
+        // Process eligible sessions in order; failed and incomplete footage stays available for review.
         const next = store.nextRecording();
         if (!next || next.status !== 'queued') return;
         store.setRecording(next.id, 'processing');
         try {
           const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15 * 60_000)]);
-          const observations = next.observations ? movementSchema.parse(JSON.parse(next.observations)) : await (options.observe ?? observeDoorVideo)(next.path, signal, store.listItems());
+          const observations = next.observations ? movementSchema.parse(JSON.parse(next.observations)) : await (options.observe ?? observeDoorVideo)(next.path, signal, store.listPackages(), next.createdAt);
           store.setRecording(next.id, 'processing', null, observations);
           if (options.reconcile) {
             const inventory = store.listItems();
             const changes = await options.reconcile(inventory, observations, signal);
+            for (const change of changes) {
+              if (!change.itemId && change.delta > 0) change.icon = await selectIcon(change.name, null);
+            }
             signal.throwIfAborted(); store.applyRecording(next.id, inventory, changes);
           } else {
             if (observations.uncertainties.length) throw new Error('Uncertain recording.');
-            await processFreshnessRecording(store, next.id, observations.movements, signal);
+            await processFreshnessRecording(store, next.id, observations.movements, signal, undefined, selectIcon);
           }
         } catch {
           store.setRecording(next.id, closed ? 'queued' : 'failed', 'Analysis could not be applied. Check configuration, observations and inventory, then retry or dismiss.');
-          return;
+          // Continue with the backlog after a failure; shutdown exits via the loop condition.
         }
       }
     })().finally(() => { processing = undefined; });
@@ -150,6 +155,11 @@ export function createRecordings(dataDir: string, store: Store, fps: number, opt
     }
     active.frames++;
   }
+  router.get('/recordings/events', (req, res) => {
+    const after = req.query.after === undefined ? undefined : Number(req.query.after);
+    if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) { res.sendStatus(400); return; }
+    res.json(store.recordingStarts(after));
+  });
   router.get('/recordings', (_req, res) => res.json(store.listRecordings().map(({ path: _, ...recording }) => recording)));
   router.get('/recordings/:id/video', (req, res) => {
     const recording = store.recording(req.params.id);

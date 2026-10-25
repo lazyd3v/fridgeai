@@ -1,3 +1,4 @@
+import { useSpeakingFridge } from './SummarySpeech';
 import { Freshness, type Package } from './Freshness';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -20,6 +21,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 function App() {
+  const speakingFridge = useSpeakingFridge();
   const [items, setItems] = useState<Item[]>([]);
   const [packages, setPackages] = useState<Item[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>([]);
@@ -167,9 +169,10 @@ function App() {
       </details>)}
     </section>
 <p className="workspace-footnote">{door.enabled ? 'Records while the door is open · Pausing hides the preview only' : 'Enable the door sensor for automatic inventory updates'}</p>
-      </> : page === 'Debug' ? <DebugPage /> : page === 'Settings' ? <section className="panel settings-panel"><h2>Your kitchen connection</h2><p className="muted">Camera and sensor status from your Raspberry Pi.</p><dl><div><dt>Camera source</dt><dd>{mode}</dd></div><div><dt>Door sensor</dt><dd>{door.enabled ? door.state : 'Not enabled'}</dd></div><div><dt>Preview</dt><dd>{live ? 'Enabled' : 'Paused'}</dd></div></dl><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section> : <section className="panel coming-soon"><span className="empty-symbol"><Icon name={page === 'Recipes' ? 'recipes' : 'shopping'} size={32}/></span><span className="eyebrow">A LITTLE SOMETHING IN THE MAKING</span><h2>{page === 'Recipes' ? 'Good food starts here.' : 'Just what you need.'}</h2><p>{page === 'Recipes' ? 'A place for ideas that make the most of your fridge.' : 'A thoughtful shopping list for your next kitchen adventure.'}</p><span className="count">Coming soon</span><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section>}
+      </> : page === 'Debug' ? <DebugPage /> : page === 'Settings' ? <section className="panel settings-panel"><h2>Your kitchen connection</h2>{speakingFridge.settings}<p className="muted">Camera and sensor status from your Raspberry Pi.</p><dl><div><dt>Camera source</dt><dd>{mode}</dd></div><div><dt>Door sensor</dt><dd>{door.enabled ? door.state : 'Not enabled'}</dd></div><div><dt>Preview</dt><dd>{live ? 'Enabled' : 'Paused'}</dd></div></dl><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section> : <section className="panel coming-soon"><span className="empty-symbol"><Icon name={page === 'Recipes' ? 'recipes' : 'shopping'} size={32}/></span><span className="eyebrow">A LITTLE SOMETHING IN THE MAKING</span><h2>{page === 'Recipes' ? 'Good food starts here.' : 'Just what you need.'}</h2><p>{page === 'Recipes' ? 'A place for ideas that make the most of your fridge.' : 'A thoughtful shopping list for your next kitchen adventure.'}</p><span className="count">Coming soon</span><button className="secondary" onClick={() => setPage('Fridge')}>Back to your fridge</button></section>}
+      {speakingFridge.notice}
     </main>
-    <Assistant />
+    <Assistant speakingFridge={speakingFridge.mode} />
   </div>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

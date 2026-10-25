@@ -73,3 +73,27 @@ test('replay captures preserve image bytes and report a missing image', async ()
     await assert.rejects(captureImage({ mode: 'replay', replayImage: join(directory, 'missing.png'), device: '' }, join(directory, 'captures')));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('Speaking fridge rejects unfinished recordings and accepts newly finished long-running analysis', async () => {
+  const { createStore } = await import('./store.ts');
+  const { DatabaseSync } = await import('node:sqlite');
+  const directory = await mkdtemp(join(tmpdir(), 'fridge-ready-'));
+  const instance = createApp(directory, { mode: 'demo', device: '' });
+  const store = createStore(join(directory, 'fridge.sqlite'));
+  const db = new DatabaseSync(join(directory, 'fridge.sqlite'));
+  const server = instance.app.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const prepare = () => fetch(`${base}/api/speaking-fridge/conversation`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recordingId: 'delayed' }) });
+  try {
+    store.createRecording('delayed', '/unused');
+    assert.equal((await prepare()).status, 409);
+    store.setRecording('delayed', 'processing');
+    assert.equal((await prepare()).status, 409);
+    db.prepare('UPDATE recordings SET createdAt = ? WHERE id = ?').run(new Date(Date.now() - 60 * 60_000).toISOString(), 'delayed');
+    store.setRecording('delayed', 'completed');
+    let response = await prepare();
+    for (let i = 0; i < 40 && response.status === 409; i++) { await new Promise(resolve => setTimeout(resolve, 50)); response = await prepare(); }
+    assert.equal(response.status, 200);
+    const thread = await response.json(); assert.match(thread.messages.at(-1).text, /No inventory changes/);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); db.close(); store.close(); await instance.close(); await rm(directory, { recursive: true, force: true }); }
+});

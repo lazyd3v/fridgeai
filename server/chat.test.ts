@@ -36,7 +36,10 @@ test('threads isolate history, reject concurrent sends, persist and record faile
     const pending = post(`/threads/${first.id}/messages`, 'wait');
     while (inputs.length < 4) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal((await post(`/threads/${first.id}/messages`, 'duplicate')).status, 409);
+    chat.notify('door-during-reply', 'Added 2 × apples after analyzing the door recording.');
     release(); await pending;
+    const withUpdate = await (await fetch(`${base}/threads/${first.id}`)).json();
+    assert.match(withUpdate.messages.at(-1).text, /Added 2 × apples/);
     assert.equal((await post(`/threads/${first.id}/messages`, 'fail')).status, 502);
     const result = await (await fetch(`${base}/threads/${first.id}`)).json();
     assert.equal(result.busy, false); assert.equal(result.messages.at(-1).error, true);
@@ -49,7 +52,7 @@ test('threads isolate history, reject concurrent sends, persist and record faile
   const server2 = app2.listen(0, '127.0.0.1'); await once(server2, 'listening');
   try {
     const result = await (await fetch(`http://127.0.0.1:${(server2.address() as { port: number }).port}/threads/${firstId}`)).json();
-    assert.equal(result.messages.length, 10);
+    assert.equal(result.messages.length, 11);
   } finally { await new Promise<void>(resolve => server2.close(() => resolve())); reopened.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
