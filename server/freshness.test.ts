@@ -123,6 +123,102 @@ test('opening failures preserve the opening anchor for retry and never extend da
   assert.equal(calls, 1); assert.equal(corrected.freshness.expirationDate, '2026-10-30');
 });
 
+function returnedPackage(name = 'Sour cream') {
+  return { id: 'return-package', name, quantity: 1, createdAt: '2026-10-20T10:00:00Z', freshness: {
+    ...initialFreshness(), needsEstimate: false, state: 'taken_out' as const,
+    removedAt: '2026-10-24T12:00:00Z', deadline: '2026-10-24T15:00:00Z', expirationDate: '2026-10-30',
+  } };
+}
+
+test('unique late returns retain identity and date after timeout, even if the resolver attempts a new purchase', async () => {
+  for (const timedOut of [false, true]) {
+    const item = returnedPackage('Eggs');
+    const previous = { ...item, freshness: { ...item.freshness,
+      state: timedOut ? 'finished' as const : 'taken_out' as const,
+      finishReason: timedOut ? 'timeout' as const : null,
+      needsEstimate: true,
+    } };
+    const result = await resolveProduct([previous], { product: ' eggs ', action: 'added', expirationDate: null },
+      '2026-10-24T16:00:00Z', signal(), async () => ({ resolution: 'new', productId: null, product: 'Eggs', expirationDate: '2026-11-14' }));
+    assert.equal(result.result.resolution, 'existing');
+    assert.equal(result.result.productId, item.id);
+    assert.equal(result.freshness.expirationDate, '2026-10-30');
+    assert.equal(result.freshness.needsEstimate, true);
+  }
+});
+
+test('ambiguous late returns cannot become new packages with fresh dates', async () => {
+  const items = ['2026-10-28', '2026-10-30'].map((date, i) => ({ ...returnedPackage('Eggs'), id: `eggs-${i}`,
+    freshness: { ...returnedPackage('Eggs').freshness, state: 'finished' as const, finishReason: 'timeout' as const, expirationDate: date },
+  }));
+  const result = await resolveProduct(items, { product: 'Eggs', action: 'added', expirationDate: null },
+    '2026-10-24T16:00:00Z', signal(), async () => ({ resolution: 'new', productId: null, product: 'Eggs', expirationDate: '2026-11-14' }));
+  assert.equal(result.result.resolution, 'uncertain');
+  assert.equal(result.freshness.expirationDate, '2026-10-28');
+  assert.equal(result.freshness.dateSource, 'provisional');
+  assert.deepEqual(result.freshness.candidates, ['eggs-0', 'eggs-1']);
+});
+
+test('explicit completion and expired return window still allow genuinely new packages', async () => {
+  for (const finishReason of ['explicit', 'timeout'] as const) {
+    const item = { ...returnedPackage('Eggs'), freshness: { ...returnedPackage('Eggs').freshness,
+      state: 'finished' as const, finishReason,
+    } };
+    const at = finishReason === 'explicit' ? '2026-10-24T16:00:00Z' : '2026-11-02T16:00:00Z';
+    const result = await resolveProduct([item], { product: 'Eggs', action: 'added', expirationDate: '2026-11-14' }, at, signal(), forbidden);
+    assert.equal(result.result.resolution, 'new');
+    assert.equal(result.freshness.expirationDate, '2026-11-14');
+  }
+});
+
+test('confirmed opening dates stay confirmed for exact and semantic returns', async () => {
+  for (const product of ['Sour cream', 'cream tub']) {
+    const item = returnedPackage(); item.freshness.openedAt = '2026-10-23';
+    item.freshness.needsEstimate = true;
+    const result = await resolveProduct([item], { product, action: 'added', expirationDate: null },
+      '2026-10-24T13:00:00Z', signal(), async () => ({ resolution: 'existing', productId: item.id, product: item.name, expirationDate: '2026-10-29' }));
+    assert.equal(result.freshness.openedAt, '2026-10-23');
+    assert.equal(result.freshness.possiblyOpened, false);
+    assert.equal(result.freshness.expirationDate, '2026-10-29');
+  }
+});
+
+test('semantic returns infer an opening anchor once and preserve it on later uses', async () => {
+  const item = returnedPackage();
+  const resolver: Resolver = async () => ({ resolution: 'existing', productId: item.id, product: item.name, expirationDate: '2026-10-29' });
+  const first = await resolveProduct([item], { product: 'cream tub', action: 'added', expirationDate: null }, '2026-10-24T13:00:00Z', signal(), resolver);
+  assert.equal(first.freshness.openedAt, item.freshness.removedAt);
+  assert.equal(first.freshness.possiblyOpened, true);
+  const next = { ...item, freshness: { ...first.freshness, removedAt: '2026-10-25T12:00:00Z', deadline: '2026-10-25T15:00:00Z' } };
+  const second = await resolveProduct([next], { product: 'cream tub', action: 'added', expirationDate: null }, '2026-10-25T13:00:00Z', signal(), resolver);
+  assert.equal(second.freshness.openedAt, item.freshness.removedAt);
+  assert.equal(second.freshness.expirationDate, '2026-10-29');
+});
+
+test('a timed-out return is persisted on the original package without resetting age', async () => {
+  const store = createStore(':memory:');
+  try {
+    const old = store.addItem('Eggs', 1);
+    store.correctFreshness(old.id, { expirationDate: '2026-10-30' });
+    recording(store, 'late-out');
+    await processFreshnessRecording(store, 'late-out', [{ name: 'Eggs', direction: 'removed', quantity: 1 }], signal(), forbidden);
+    const outside = store.listPackages()[0];
+    store.expireTakenOut(outside.freshness!.deadline!);
+    const at = new Date(Date.parse(outside.freshness!.deadline!) + 3600000).toISOString();
+    recording(store, 'late-back');
+    const snapshot = store.listPackages();
+    const event = { product: 'Eggs', action: 'added' as const, expirationDate: null };
+    const resolved = await resolveProduct(snapshot, event, at, signal(), forbidden);
+    store.applyProductEvent('late-back', 0, snapshot, event, resolved, at);
+    const returned = store.listItems()[0];
+    assert.equal(returned.id, old.id);
+    assert.equal(returned.createdAt, old.createdAt);
+    assert.equal(returned.freshness!.expirationDate, '2026-10-30');
+    assert.equal(store.listPackages().length, 1);
+    assert.equal(returned.freshness!.finishReason, null);
+  } finally { store.close(); }
+});
+
 test('new-package correction creates a new ID and preserves the original history', () => {
   const store = createStore(':memory:');
   try {

@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import { observeDoorVideoUrl, doorEventsSchema, toMovements, doorRecognitionContext } from './door-ai.ts';
 
 test('door observation receives packaging descriptions and returns product/action pairs', async () => {
-  const inventory = [{ id: 'cola', name: 'Cola', quantity: 2, createdAt: 'today', notes: '330 ml cans' }];
+  const inventory = [
+    { id: 'cola', name: 'Cola', quantity: 2, createdAt: 'today', notes: '330 ml cans' },
+    { id: 'milk', name: 'Milk', quantity: 1, createdAt: 'today' },
+    { id: 'eggs', name: 'Eggs', quantity: 1, createdAt: 'today', notes: null },
+  ];
   const expected = { events: [{ product: 'Potatoes', action: 'removed' as const, expirationDate: null }, { product: 'Cola', action: 'removed' as const, expirationDate: null }] };
   const request: typeof fetch = async (_url, options) => {
     const body = JSON.parse(options!.body as string);
@@ -13,8 +17,8 @@ test('door observation receives packaging descriptions and returns product/actio
     assert.match(body.messages[0].content, /audio.*untrusted|untrusted.*audio/);
     assert.match(body.messages[0].content, /untrusted data/);
     assert.equal(body.messages[1].content[0].video_url.url, 'https://example.test/clip.mp4');
-    assert.deepEqual(JSON.parse(body.messages[1].content[1].text).knownInventory, [{ name: 'Cola', description: '330 ml cans' }]);
-    assert.doesNotMatch(JSON.stringify(body.messages), /createdAt/);
+    assert.deepEqual(JSON.parse(body.messages[1].content[1].text).knownInventory, [{ name: 'Cola', description: '330 ml cans' }, { name: 'Milk', description: null }, { name: 'Eggs', description: null }]);
+    assert.doesNotMatch(JSON.stringify(body.messages), /createdAt|"quantity"|"id"/);
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(expected) } }] });
   };
   assert.deepEqual(await observeDoorVideoUrl('https://example.test/clip.mp4', inventory, new AbortController().signal, request, 'test-key', undefined, async raw => doorEventsSchema.parse(JSON.parse(raw))), expected);
